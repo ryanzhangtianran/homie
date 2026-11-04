@@ -1,5 +1,5 @@
 #!/bin/sh
-# curl -fsSL https://raw.githubusercontent.com/ryanzhangtianran/homie/main/install.sh | sh
+# curl -fsSL https://raw.githubusercontent.com/ryanzhangtianran/homie/main/scripts/install.sh | sh
 set -e
 os=$(uname -s | tr A-Z a-z); arch=$(uname -m)
 case $arch in x86_64|amd64) arch=amd64;; aarch64|arm64) arch=arm64;; *) echo "unsupported $arch"; exit 1;; esac

@@ -7,19 +7,25 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
+	"github.com/ryanzhangtianran/homie/internal/config"
+	"github.com/ryanzhangtianran/homie/internal/dotfiles"
+	"github.com/ryanzhangtianran/homie/internal/pkgs"
+	"github.com/ryanzhangtianran/homie/internal/ui"
 )
 
+var version = "dev"
+
 func main() {
-	loadTheme()
+	ui.LoadTheme()
 	if err := run(os.Args[1:]); err != nil && !errors.Is(err, huh.ErrUserAborted) { // Ctrl-C is not an error
-		sayErr(err)
+		ui.SayErr(err)
 		os.Exit(1)
 	}
 }
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return ui()
+		return menuLoop()
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
@@ -28,80 +34,80 @@ func run(args []string) error {
 		if len(rest) > 0 {
 			repo = rest[0]
 		}
-		return initSource(repo)
+		return dotfiles.Init(repo)
 	case "remote":
 		if len(rest) == 0 {
-			return git("remote", "-v")
+			return dotfiles.Git("remote", "-v")
 		}
-		return bind(rest[0])
+		return dotfiles.Bind(rest[0])
 	case "push":
 		msg := "update dotfiles"
 		if len(rest) > 0 {
 			msg = strings.Join(rest, " ")
 		}
-		return push(msg)
+		return dotfiles.Push(msg)
 	case "add":
 		tag := ""
 		if len(rest) > 1 && (rest[0] == "-t" || rest[0] == "--tag") {
 			tag, rest = rest[1], rest[2:]
 		}
 		for _, p := range rest {
-			if err := add(p, tag); err != nil {
+			if err := dotfiles.Add(p, tag); err != nil {
 				return err
 			}
 		}
 		return nil
 	case "status":
-		return status()
+		return dotfiles.Status()
 	case "diff":
-		return diff()
+		return dotfiles.Diff()
 	case "apply":
-		return apply()
+		return dotfiles.Apply()
 	case "pull":
-		if err := git("pull", "--ff-only"); err != nil {
+		if err := dotfiles.Git("pull", "--ff-only"); err != nil {
 			return err
 		}
-		return applyWith(false)
+		return dotfiles.ApplyWith(false)
 	case "theme":
 		if len(rest) == 0 {
-			fmt.Println(strings.Join(themeNames, "\n"))
+			fmt.Println(strings.Join(ui.ThemeNames, "\n"))
 			return nil
 		}
-		return setTheme(rest[0])
+		return ui.SetTheme(rest[0])
 	case "update":
-		if err := git("pull", "--ff-only"); err != nil {
+		if err := dotfiles.Git("pull", "--ff-only"); err != nil {
 			return err
 		}
-		if err := apply(); err != nil {
+		if err := dotfiles.Apply(); err != nil {
 			return err
 		}
-		return install(nil)
+		return pkgs.Install(nil)
 	case "machine":
 		if len(rest) == 0 {
-			fmt.Println(machine())
+			fmt.Println(config.Machine())
 			return nil
 		}
-		return setMachine(rest[0])
+		return config.SetMachine(rest[0])
 	case "pkgs":
-		return listPkgs()
+		return pkgs.List()
 	case "install", "upgrade":
-		return install(rest)
+		return pkgs.Install(rest)
 	case "add-pkg":
 		if len(rest) < 2 {
 			return errors.New(`usage: homie add-pkg <name> <gh:owner/repo | "install command">`)
 		}
-		return addPkg(rest[0], strings.Join(rest[1:], " "))
+		return pkgs.AddPkg(rest[0], strings.Join(rest[1:], " "))
 	case "outdated":
-		return outdated()
+		return pkgs.Outdated()
 	case "uninstall", "remove":
-		return uninstall(rest)
+		return pkgs.Uninstall(rest)
 	case "self-update":
-		return selfUpdate()
+		return pkgs.SelfUpdate(version)
 	case "cd":
-		fmt.Println(srcDir())
+		fmt.Println(config.SrcDir())
 		return nil
 	case "git":
-		return git(rest...)
+		return dotfiles.Git(rest...)
 	case "version", "--version":
 		fmt.Println(version)
 		return nil
@@ -113,158 +119,49 @@ func run(args []string) error {
 	return fmt.Errorf("unknown command %q", cmd)
 }
 
-func ui() error {
-	if !dirExists(srcDir()) {
-		repo := ""
-		if err := ask(huh.NewInput().Title("No config repo yet").Description("GitHub repo to bind, e.g. you/dotfiles (empty = local only)").Value(&repo)); err != nil {
-			return err
-		}
-		if err := initSource(repo); err != nil {
-			return err
-		}
-	}
-	for {
-		fmt.Println(header())
-		var opts []huh.Option[string]
-		for _, m := range menu {
-			opts = append(opts, huh.NewOption(fmt.Sprintf("%-12s %s", m[1], m[2]), m[0]))
-		}
-		var choice string
-		err := ask(huh.NewSelect[string]().Title("What next?").Options(opts...).Value(&choice))
-		if errors.Is(err, huh.ErrUserAborted) || choice == "quit" {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if err := uiAction(choice); err != nil && !errors.Is(err, huh.ErrUserAborted) {
-			sayErr(err)
-		}
-		fmt.Println()
-	}
+var helpSections = []struct {
+	title string
+	rows  [][]string
+}{
+	{"Dotfiles", [][]string{
+		{"homie", "interactive UI"},
+		{"status | diff", "what apply would change"},
+		{"apply", "write files, install missing packages"},
+		{"add [-t tag] <path>...", "manage files; -t server = ##server variant"},
+		{"machine [name]", "show or set this machine's name"},
+		{"pull", "update dotfiles only, no packages"},
+		{"update", "pull + apply + upgrade packages"},
+	}},
+	{"Repo", [][]string{
+		{"init [user/repo[@branch]]", "clone your config repo, or create and bind it"},
+		{"remote [user/repo]", "show or change the bound repo"},
+		{"push [message]", "commit everything and push"},
+		{"cd", `print the source dir: cd "$(homie cd)"`},
+		{"git <args>", "run git in the source dir"},
+		{"theme [name]", "list or set the color scheme"},
+	}},
+	{"Packages", [][]string{
+		{"pkgs", "list this machine's packages"},
+		{"add-pkg <name> <spec>", "add a package to .homie.toml and install it"},
+		{"install [pkg...]", "install or upgrade; named ones always rerun"},
+		{"upgrade", "upgrade all packages"},
+		{"outdated", "check for new releases"},
+		{"uninstall <pkg...>", "remove what homie installed"},
+		{"self-update", "update homie itself"},
+	}},
 }
 
-// menu entries: command, label, description, alphabetical by label with Quit last
-// (labels are padded when rendered so the descriptions line up).
-var menu = [][3]string{
-	{"add", "Add file", "start managing a file under $HOME"},
-	{"add-pkg", "Add package", "add a line to .homie.toml"},
-	{"apply", "Apply", "write files, install missing packages"},
-	{"diff", "Diff", "line-by-line changes"},
-	{"install", "Install", "install or upgrade packages"},
-	{"machine", "Machine", "set this machine's name"},
-	{"outdated", "Outdated", "check for new releases"},
-	{"pull", "Pull", "update dotfiles only (git pull + write files)"},
-	{"push", "Push", "commit and push to GitHub"},
-	{"self-update", "Self-update", "update homie itself"},
-	{"status", "Status", "what apply would change"},
-	{"theme", "Theme", "change the color scheme"},
-	{"uninstall", "Uninstall", "remove packages"},
-	{"update", "Update all", "pull + apply + upgrade packages"},
-	{"quit", "Quit", ""},
-}
-
-// pickPkgs shows a multi-select of this machine's packages, filtered by keep.
-func pickPkgs(title string, keep func(Pkg) bool) ([]string, error) {
-	ps, err := packages()
-	if err != nil {
-		return nil, err
+// help aligns all sections as one block so the descriptions share a column.
+func help() string {
+	var rows [][]string
+	for i, s := range helpSections {
+		if i > 0 {
+			rows = append(rows, []string{""})
+		}
+		rows = append(rows, []string{ui.Bold.Render(s.title)})
+		for _, r := range s.rows {
+			rows = append(rows, []string{"  " + r[0], ui.Dim.Render(r[1])})
+		}
 	}
-	var opts []huh.Option[string]
-	for _, p := range ps {
-		if !keep(p) {
-			continue
-		}
-		label := p.Name
-		if installed(p) {
-			label += " ✓"
-		}
-		opts = append(opts, huh.NewOption(label, p.Name))
-	}
-	if len(opts) == 0 {
-		return nil, errors.New("no packages")
-	}
-	var picked []string
-	err = ask(huh.NewMultiSelect[string]().Title(title).Description("space to toggle, enter to confirm").Options(opts...).Value(&picked))
-	return picked, err
-}
-
-func confirm(title string) bool {
-	ok := false
-	return ask(huh.NewConfirm().Title(title).Value(&ok)) == nil && ok
-}
-
-func uiAction(choice string) error {
-	switch choice {
-	case "apply":
-		es, err := changed()
-		if err != nil {
-			return err
-		}
-		if len(es) > 0 {
-			_ = status()
-			if !confirm(fmt.Sprintf("Apply %d file(s)?", len(es))) {
-				return nil
-			}
-		}
-		return apply()
-	case "add":
-		p, tag := "", ""
-		err := ask(
-			huh.NewInput().Title("Path to add").Placeholder("~/.bashrc").Value(&p),
-			huh.NewInput().Title("Only for machine/OS").Placeholder("empty = all").Value(&tag),
-		)
-		if err != nil || p == "" {
-			return err
-		}
-		if strings.HasPrefix(p, "~/") {
-			p = home() + p[1:]
-		}
-		return add(p, tag)
-	case "push":
-		msg := "update dotfiles"
-		if err := ask(huh.NewInput().Title("Commit message").Value(&msg)); err != nil {
-			return err
-		}
-		return push(msg)
-	case "install":
-		picked, err := pickPkgs("Install / upgrade", func(Pkg) bool { return true })
-		if err != nil || len(picked) == 0 {
-			return err
-		}
-		return install(picked)
-	case "add-pkg":
-		name, spec := "", ""
-		err := ask(
-			huh.NewInput().Title("Name").Placeholder("bat").Value(&name),
-			huh.NewInput().Title("Spec").Description("gh:owner/repo or an install command").Placeholder("gh:sharkdp/bat").Value(&spec),
-		)
-		if err != nil || name == "" || spec == "" {
-			return err
-		}
-		return addPkg(name, spec)
-	case "uninstall":
-		picked, err := pickPkgs("Uninstall", installed)
-		if err != nil || len(picked) == 0 || !confirm("Remove "+strings.Join(picked, ", ")+"?") {
-			return err
-		}
-		return uninstall(picked)
-	case "theme":
-		var opts []huh.Option[string]
-		for _, n := range themeNames {
-			opts = append(opts, huh.NewOption(n, n))
-		}
-		name := ""
-		if err := ask(huh.NewSelect[string]().Title("Color scheme").Options(opts...).Value(&name)); err != nil {
-			return err
-		}
-		return setTheme(name)
-	case "machine":
-		m := machine()
-		if err := ask(huh.NewInput().Title("Machine name").Description("selects ##variants, e.g. server").Value(&m)); err != nil || m == "" {
-			return err
-		}
-		return setMachine(m)
-	}
-	return run([]string{choice})
+	return ui.Box("homie "+version+" · dotfiles + user-level tools, no sudo", ui.Columns(nil, rows))
 }

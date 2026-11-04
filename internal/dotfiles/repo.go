@@ -1,14 +1,17 @@
-package main
+package dotfiles
 
 import (
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/ryanzhangtianran/homie/internal/config"
+	"github.com/ryanzhangtianran/homie/internal/ui"
 )
 
-func git(args ...string) error {
-	c := exec.Command("git", append([]string{"-C", srcDir()}, args...)...)
+func Git(args ...string) error {
+	c := exec.Command("git", append([]string{"-C", config.SrcDir()}, args...)...)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return c.Run()
 }
@@ -35,14 +38,14 @@ func splitBranch(s string) (repo, branch string) {
 	return s, ""
 }
 
-// initSource clones repo[@branch] if it exists, otherwise creates a local repo (with a starter .homie.toml) bound to it.
-func initSource(spec string) error {
-	if dirExists(srcDir()) {
-		return fmt.Errorf("%s already exists (use `homie remote` to change the binding)", srcDir())
+// Init clones repo[@branch] if it exists, otherwise creates a local repo (with a starter .homie.toml) bound to it.
+func Init(spec string) error {
+	if config.Exists(config.SrcDir()) {
+		return fmt.Errorf("%s already exists (use `homie remote` to change the binding)", config.SrcDir())
 	}
 	repo, branch := splitBranch(spec)
 	if repo != "" && remoteExists(repoURL(repo)) {
-		args := []string{"clone", repoURL(repo), srcDir()}
+		args := []string{"clone", repoURL(repo), config.SrcDir()}
 		if branch != "" {
 			args = append(args, "--branch", branch)
 		}
@@ -50,37 +53,37 @@ func initSource(spec string) error {
 		c.Stdout, c.Stderr = os.Stdout, os.Stderr
 		return c.Run()
 	}
-	if err := os.MkdirAll(srcDir(), 0o755); err != nil {
+	if err := os.MkdirAll(config.SrcDir(), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(configFile(), []byte(defaultConfig), 0o644); err != nil {
+	if err := os.WriteFile(config.File(), []byte(config.Default), 0o644); err != nil {
 		return err
 	}
-	if err := git("init", "-q"); err != nil {
+	if err := Git("init", "-q"); err != nil {
 		return err
 	}
 	if branch != "" {
-		if err := git("checkout", "-q", "-b", branch); err != nil {
+		if err := Git("checkout", "-q", "-b", branch); err != nil {
 			return err
 		}
 	}
 	if repo == "" {
 		return nil
 	}
-	return bind(repo)
+	return Bind(repo)
 }
 
-// bind points origin at repo, creating it on GitHub (private) via gh when it does not exist yet.
-func bind(repo string) error {
+// Bind points origin at repo, creating it on GitHub (private) via gh when it does not exist yet.
+func Bind(repo string) error {
 	url := repoURL(repo)
-	if exec.Command("git", "-C", srcDir(), "remote", "get-url", "origin").Run() == nil {
-		if err := git("remote", "set-url", "origin", url); err != nil {
+	if exec.Command("git", "-C", config.SrcDir(), "remote", "get-url", "origin").Run() == nil {
+		if err := Git("remote", "set-url", "origin", url); err != nil {
 			return err
 		}
-	} else if err := git("remote", "add", "origin", url); err != nil {
+	} else if err := Git("remote", "add", "origin", url); err != nil {
 		return err
 	}
-	say(cOK, "✓", "bound", url)
+	ui.Say(ui.OK, "✓", "bound", url)
 	if remoteExists(url) {
 		return nil
 	}
@@ -89,18 +92,18 @@ func bind(repo string) error {
 		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 		return c.Run()
 	}
-	say(cWarn, "!", "note", "repo not found: create it on GitHub, then run `homie push`")
+	ui.Say(ui.Warn, "!", "note", "repo not found: create it on GitHub, then run `homie push`")
 	return nil
 }
 
-func push(msg string) error {
-	if err := git("add", "-A"); err != nil {
+func Push(msg string) error {
+	if err := Git("add", "-A"); err != nil {
 		return err
 	}
-	if exec.Command("git", "-C", srcDir(), "diff", "--cached", "--quiet").Run() != nil { // staged changes exist
-		if err := git("commit", "-q", "-m", msg); err != nil {
+	if exec.Command("git", "-C", config.SrcDir(), "diff", "--cached", "--quiet").Run() != nil { // staged changes exist
+		if err := Git("commit", "-q", "-m", msg); err != nil {
 			return err
 		}
 	}
-	return git("push", "-u", "origin", "HEAD")
+	return Git("push", "-u", "origin", "HEAD")
 }

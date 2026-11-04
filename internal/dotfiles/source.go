@@ -1,10 +1,11 @@
-package main
+package dotfiles
 
 import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"html/template"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -13,54 +14,13 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ryanzhangtianran/homie/internal/config"
+	"github.com/ryanzhangtianran/homie/internal/pkgs"
+	"github.com/ryanzhangtianran/homie/internal/ui"
 )
-
-func home() string { h, _ := os.UserHomeDir(); return h }
-
-func srcDir() string {
-	if d := os.Getenv("HOMIE_SOURCE"); d != "" {
-		return d
-	}
-	return filepath.Join(home(), ".local", "share", "homie")
-}
-
-func stateDir() string { return filepath.Join(home(), ".local", "state", "homie") }
-
-func dirExists(p string) bool { _, err := os.Stat(p); return err == nil }
-
-// machine names this box for ##variants, templates and package `only`:
-// $HOMIE_MACHINE, else the saved name, else the config's machine_detect output, else the OS.
-func machine() string {
-	if m := os.Getenv("HOMIE_MACHINE"); m != "" {
-		return m
-	}
-	if b, err := os.ReadFile(filepath.Join(stateDir(), "machine")); err == nil {
-		return strings.TrimSpace(string(b))
-	}
-	if cfg, err := loadConfig(); err == nil && cfg.MachineDetect != "" {
-		if out, err := shellOutput(cfg.MachineDetect); err == nil && strings.TrimSpace(out) != "" {
-			m := strings.TrimSpace(out)
-			_ = setMachine(m)
-			return m
-		}
-	}
-	return runtime.GOOS
-}
-
-func setMachine(m string) error {
-	if err := os.MkdirAll(stateDir(), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(stateDir(), "machine"), []byte(m+"\n"), 0o644)
-}
-
-func matches(tags []string, m string) bool {
-	return slices.ContainsFunc(tags, func(t string) bool { return t == m || t == runtime.GOOS })
-}
 
 // attrs is one parsed source path component, chezmoi style: [private_][executable_][dot_]name[.tmpl][##tag,tag].
 type attrs struct {
@@ -107,7 +67,7 @@ func render(name string, src []byte, m string) ([]byte, error) {
 	host, _ := os.Hostname()
 	t, err := template.New(name).Option("missingkey=error").Funcs(template.FuncMap{
 		"include": func(p string) (string, error) {
-			b, err := os.ReadFile(filepath.Join(srcDir(), filepath.FromSlash(p)))
+			b, err := os.ReadFile(filepath.Join(config.SrcDir(), filepath.FromSlash(p)))
 			return string(b), err
 		},
 		"sha256sum": func(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) },
@@ -117,7 +77,7 @@ func render(name string, src []byte, m string) ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	err = t.Execute(&buf, map[string]any{
-		"os": runtime.GOOS, "arch": runtime.GOARCH, "hostname": host, "machine": m, "home": home(),
+		"os": runtime.GOOS, "arch": runtime.GOARCH, "hostname": host, "machine": m, "home": config.Home(),
 	})
 	return buf.Bytes(), err
 }
@@ -134,8 +94,8 @@ type entry struct {
 // default, other variants are dropped) plus the run_ scripts. Names starting with "." are metadata.
 func scan(m string) (files []entry, scripts []entry, err error) {
 	best, rank := map[string]entry{}, map[string]int{}
-	err = filepath.WalkDir(srcDir(), func(p string, d fs.DirEntry, err error) error {
-		if err != nil || p == srcDir() {
+	err = filepath.WalkDir(config.SrcDir(), func(p string, d fs.DirEntry, err error) error {
+		if err != nil || p == config.SrcDir() {
 			return err
 		}
 		if strings.HasPrefix(d.Name(), ".") {
@@ -147,10 +107,10 @@ func scan(m string) (files []entry, scripts []entry, err error) {
 		if d.IsDir() {
 			return nil
 		}
-		rel, _ := filepath.Rel(srcDir(), p)
+		rel, _ := filepath.Rel(config.SrcDir(), p)
 		parts := strings.Split(filepath.ToSlash(rel), "/")
 		e := entry{src: p}
-		dst := home()
+		dst := config.Home()
 		for i, part := range parts {
 			a := parseName(part, i == len(parts)-1)
 			dst = filepath.Join(dst, a.name)
@@ -160,7 +120,7 @@ func scan(m string) (files []entry, scripts []entry, err error) {
 				}
 				continue
 			}
-			if len(a.tags) > 0 && !matches(a.tags, m) {
+			if len(a.tags) > 0 && !config.Matches(a.tags, m) {
 				return nil
 			}
 			e.dst, e.mode, e.tmpl = dst, a.mode(), a.tmpl
@@ -205,37 +165,37 @@ func scan(m string) (files []entry, scripts []entry, err error) {
 	return files, scripts, err
 }
 
-func changed() ([]entry, error) {
-	files, _, err := scan(machine())
+func Changed() ([]entry, error) {
+	files, _, err := scan(config.Machine())
 	return slices.DeleteFunc(files, func(e entry) bool { return e.state == "" }), err
 }
 
-func rel(p string) string { r, _ := filepath.Rel(home(), p); return r }
+func Rel(p string) string { r, _ := filepath.Rel(config.Home(), p); return r }
 
-func status() error {
-	es, err := changed()
+func Status() error {
+	es, err := Changed()
 	if err != nil {
 		return err
 	}
-	title := "Status · machine " + machine()
+	title := "Status · machine " + config.Machine()
 	if len(es) == 0 {
-		fmt.Println(box(title, lipgloss.NewStyle().Foreground(cOK).Render("✓ everything up to date")))
+		fmt.Println(ui.Box(title, lipgloss.NewStyle().Foreground(ui.OK).Render("✓ everything up to date")))
 		return nil
 	}
 	var rows [][]string
 	for _, e := range es {
-		st := lipgloss.NewStyle().Foreground(cOK).Render("+ new")
+		st := lipgloss.NewStyle().Foreground(ui.OK).Render("+ new")
 		if e.state == "M" {
-			st = lipgloss.NewStyle().Foreground(cWarn).Render("~ changed")
+			st = lipgloss.NewStyle().Foreground(ui.Warn).Render("~ changed")
 		}
-		rows = append(rows, []string{st, "~/" + rel(e.dst)})
+		rows = append(rows, []string{st, "~/" + Rel(e.dst)})
 	}
-	grid(title, []string{"STATE", "FILE"}, rows)
+	ui.Grid(title, []string{"STATE", "FILE"}, rows)
 	return nil
 }
 
-func diff() error {
-	es, err := changed()
+func Diff() error {
+	es, err := Changed()
 	for _, e := range es {
 		old, src := e.dst, e.src
 		if e.state == "A" {
@@ -251,7 +211,7 @@ func diff() error {
 			defer os.Remove(f.Name())
 			src = f.Name()
 		}
-		say(cAccent, "◆", "diff", "~/"+rel(e.dst))
+		ui.Say(ui.Accent, "◆", "diff", "~/"+Rel(e.dst))
 		c := exec.Command("git", "--no-pager", "diff", "--no-index", "--", old, src)
 		c.Stdout, c.Stderr = os.Stdout, os.Stderr
 		_ = c.Run() // exits 1 when files differ
@@ -274,24 +234,24 @@ func writeFile(e entry) error {
 	return os.Chmod(e.dst, e.mode) // WriteFile keeps the old mode of an existing file
 }
 
-// apply writes changed files (backing up what it overwrites), installs missing packages, then runs scripts.
-func apply() error { return applyWith(true) }
+// Apply writes changed files (backing up what it overwrites), installs missing packages, then runs scripts.
+func Apply() error { return ApplyWith(true) }
 
-// applyWith is apply; pkgs=false leaves packages alone (homie pull: dotfiles only).
-func applyWith(pkgs bool) error {
-	m := machine()
+// ApplyWith is apply; pkgs=false leaves packages alone (homie pull: dotfiles only).
+func ApplyWith(withPkgs bool) error {
+	m := config.Machine()
 	files, scripts, err := scan(m)
 	if err != nil {
 		return err
 	}
-	backup := filepath.Join(stateDir(), "backup", time.Now().Format("20060102-150405"))
+	backup := filepath.Join(config.StateDir(), "backup", time.Now().Format("20060102-150405"))
 	backedUp := false
 	for _, e := range files {
 		if e.state == "" {
 			continue
 		}
 		if have, err := os.ReadFile(e.dst); err == nil && !bytes.Equal(have, e.data) {
-			b := filepath.Join(backup, rel(e.dst))
+			b := filepath.Join(backup, Rel(e.dst))
 			if err := os.MkdirAll(filepath.Dir(b), 0o755); err != nil {
 				return err
 			}
@@ -303,67 +263,24 @@ func applyWith(pkgs bool) error {
 		if err := writeFile(e); err != nil {
 			return err
 		}
-		say(cOK, "✓", "apply", "~/"+rel(e.dst))
+		ui.Say(ui.OK, "✓", "apply", "~/"+Rel(e.dst))
 	}
 	if backedUp {
-		say(cDim, "↺", "backup", "overwritten files saved in "+backup)
+		ui.Say(ui.Muted, "↺", "backup", "overwritten files saved in "+backup)
 	}
-	if pkgs {
-		if err := installMissing(); err != nil {
+	if withPkgs {
+		if err := pkgs.InstallMissing(); err != nil {
 			return err
 		}
 	}
 	return runScripts(scripts)
 }
 
-// runScripts runs run_* every apply and run_onchange_* only when its rendered content changed.
-func runScripts(scripts []entry) error {
-	hashes := loadJSON("scripts.json")
-	for _, s := range scripts {
-		name := filepath.Base(s.dst)
-		if (runtime.GOOS == "windows") != strings.HasSuffix(name, ".ps1") {
-			continue // .ps1 scripts are for Windows, everything else for unix
-		}
-		sum := sha256.Sum256(s.data)
-		h := hex.EncodeToString(sum[:])
-		if strings.HasPrefix(name, "run_onchange_") && hashes[name] == h {
-			continue
-		}
-		say(cAccent, "▶", "run", name)
-		f, err := os.CreateTemp("", "homie-*-"+name)
-		if err != nil {
-			return err
-		}
-		f.Write(s.data)
-		f.Close()
-		os.Chmod(f.Name(), 0o700)
-		var c *exec.Cmd
-		if runtime.GOOS == "windows" {
-			c = exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", f.Name())
-		} else if bytes.HasPrefix(s.data, []byte("#!")) {
-			c = exec.Command(f.Name())
-		} else {
-			c = exec.Command("sh", f.Name())
-		}
-		c.Dir, c.Stdin, c.Stdout, c.Stderr = home(), os.Stdin, os.Stdout, os.Stderr
-		err = c.Run()
-		os.Remove(f.Name())
-		if err != nil {
-			return fmt.Errorf("%s: %w", name, err)
-		}
-		hashes[name] = h
-		if err := saveJSON("scripts.json", hashes); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // sourcePath picks the source path for a home-relative target, reusing source names that already exist
 // (so private_dot_config stays private_dot_config) and deriving attributes from the file otherwise.
 func sourcePath(target, tag string) (string, error) {
 	parts := strings.Split(filepath.ToSlash(target), "/")
-	dir, tdir := srcDir(), home()
+	dir, tdir := config.SrcDir(), config.Home()
 	for i, part := range parts {
 		last := i == len(parts)-1
 		tdir = filepath.Join(tdir, part)
@@ -404,20 +321,20 @@ func sourcePath(target, tag string) (string, error) {
 	return dir, nil
 }
 
-// add copies files under $HOME into the source dir; tag makes them a variant for that machine/OS.
-func add(path, tag string) error {
+// Add copies files under $HOME into the source dir; tag makes them a variant for that machine/OS.
+func Add(path, tag string) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return err
 	}
-	if r, err := filepath.Rel(home(), abs); err != nil || strings.HasPrefix(r, "..") || r == "." {
+	if r, err := filepath.Rel(config.Home(), abs); err != nil || strings.HasPrefix(r, "..") || r == "." {
 		return fmt.Errorf("%s is not under your home directory", path)
 	}
 	return filepath.WalkDir(abs, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		dst, err := sourcePath(rel(p), tag)
+		dst, err := sourcePath(Rel(p), tag)
 		if err != nil {
 			return err
 		}
@@ -428,22 +345,8 @@ func add(path, tag string) error {
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
-		r, _ := filepath.Rel(srcDir(), dst)
-		say(cOK, "+", "add", "~/"+rel(p)+dim.Render("  →  "+r))
+		r, _ := filepath.Rel(config.SrcDir(), dst)
+		ui.Say(ui.OK, "+", "add", "~/"+Rel(p)+ui.Dim.Render("  →  "+r))
 		return os.WriteFile(dst, data, 0o644)
 	})
-}
-
-func shell(script string) *exec.Cmd {
-	if runtime.GOOS == "windows" {
-		return exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
-	}
-	return exec.Command("sh", "-c", script)
-}
-
-func shellOutput(script string) (string, error) {
-	c := shell(script)
-	c.Stderr = os.Stderr
-	out, err := c.Output()
-	return string(out), err
 }

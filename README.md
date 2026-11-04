@@ -5,8 +5,8 @@ macOS / Linux / Windows, never needs sudo.
 
 ## Install
 
-    curl -fsSL https://raw.githubusercontent.com/ryanzhangtianran/homie/main/install.sh | sh     # macOS/Linux
-    irm https://raw.githubusercontent.com/ryanzhangtianran/homie/main/install.ps1 | iex          # Windows
+    curl -fsSL https://raw.githubusercontent.com/ryanzhangtianran/homie/main/scripts/install.sh | sh     # macOS/Linux
+    irm https://raw.githubusercontent.com/ryanzhangtianran/homie/main/scripts/install.ps1 | iex          # Windows
     # or: go install github.com/ryanzhangtianran/homie@latest
 
 Run `homie` for the interactive UI; `homie help` lists commands.
@@ -63,10 +63,19 @@ on Windows) only when the program is missing; `homie install <name>` reruns it o
 
 Use a table when one line is not enough: per-OS/machine differences (`on.windows = "..."`),
 `only = ["server"]`, `bins`, an explicit `url` with `{os} {arch} {rust} {version}`, `files`, `remove`.
-See [default.toml](default.toml), which `homie init` writes for a new repo.
+See [default.toml](internal/config/default.toml), which `homie init` writes for a new repo.
 
 `apply` installs only missing packages, so it stays offline otherwise. `upgrade` fetches the latest
 versions, and `uninstall` removes only what homie put under `$HOME`.
+
+## Code layout
+
+    main.go, tui.go        command line and interactive menu
+    internal/config        paths, .homie.toml parsing (default.toml), machine name
+    internal/dotfiles      source scan, apply/add/status/diff, run_ scripts, git repo binding
+    internal/pkgs          package install/upgrade, release asset picking, archives
+    internal/ui            boxes, columns, color themes
+    scripts/               install.sh / install.ps1
 
 ## Release
 
