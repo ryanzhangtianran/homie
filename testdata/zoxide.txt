@@ -1,0 +1,17 @@
+zoxide-0.10.0-aarch64-apple-darwin.tar.gz
+zoxide-0.10.0-aarch64-linux-android.tar.gz
+zoxide-0.10.0-aarch64-pc-windows-msvc.zip
+zoxide-0.10.0-aarch64-unknown-linux-musl.tar.gz
+zoxide-0.10.0-arm-unknown-linux-musleabihf.tar.gz
+zoxide-0.10.0-armv7-linux-androideabi.tar.gz
+zoxide-0.10.0-armv7-unknown-linux-musleabihf.tar.gz
+zoxide-0.10.0-i686-unknown-linux-musl.tar.gz
+zoxide-0.10.0-riscv64gc-unknown-linux-musl.tar.gz
+zoxide-0.10.0-x86_64-apple-darwin.tar.gz
+zoxide-0.10.0-x86_64-pc-windows-msvc.zip
+zoxide-0.10.0-x86_64-unknown-linux-musl.tar.gz
+zoxide_0.10.0-1_amd64.deb
+zoxide_0.10.0-1_arm64.deb
+zoxide_0.10.0-1_armhf.deb
+zoxide_0.10.0-1_i386.deb
+zoxide_0.10.0-1_riscv64.deb

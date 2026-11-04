@@ -1,0 +1,32 @@
+# homie config. Lives in your dotfiles repo; names starting with "." are never copied into $HOME.
+#
+# machine_detect: optional shell snippet printing this machine's name. The name selects ##variants,
+# {{ .machine }} in templates and `only` below. It runs once and is saved; `homie machine <name>`
+# overrides it. Without it the machine name is the OS (darwin / linux / windows).
+#
+# machine_detect = '''
+# case "$(uname -s)" in Darwin) echo mac ;; *) echo server ;; esac
+# '''
+
+# One line per app. `homie add-pkg <name> <spec>` appends here and installs.
+#   "gh:owner/repo"  latest GitHub release; the asset for this OS/arch is picked automatically and
+#                    its executables go to ~/.local/bin (supports outdated / upgrade / uninstall)
+#   anything else    an install command, run with sh (PowerShell on Windows); upgrade reruns it
+[packages]
+fnm      = "gh:Schniz/fnm"
+starship = "gh:starship/starship"
+fzf      = "gh:junegunn/fzf"
+ripgrep  = "gh:BurntSushi/ripgrep"
+uv       = "gh:astral-sh/uv"
+
+# Table form, only when one line is not enough:
+#   on."<os>" / on."<os>/<arch>" / on."<machine>"  a different spec (or fields) there
+#   only = ["server", "darwin"]                     install only on these machines/OSes
+#   bins = ["rg"]                                   pick executables instead of taking all
+#   url = "https://.../tool-{version}-{os}_{arch}.tar.gz"   when the automatic pick is wrong
+#   files = { "geoip.dat" = ".local/share/x/geoip.dat" }   extra archive files to install
+#   remove = [".local/share/x"]                     extra paths `homie uninstall` deletes
+[packages.claude]
+script = "curl -fsSL https://claude.ai/install.sh | bash"
+on.windows = "irm https://claude.ai/install.ps1 | iex"
+remove = [".local/share/claude"]

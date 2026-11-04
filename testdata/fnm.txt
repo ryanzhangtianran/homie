@@ -1,0 +1,5 @@
+fnm-arm32.zip
+fnm-arm64.zip
+fnm-linux.zip
+fnm-macos.zip
+fnm-windows.zip
