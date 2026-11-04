@@ -9,33 +9,9 @@ import (
 	"github.com/charmbracelet/huh"
 )
 
-const usage = `homie - dotfiles + user-level tool manager (no sudo)
-
-  homie                         interactive UI
-  homie init [user/repo[@br]]   clone your GitHub config repo (optionally a branch), or create + bind it;
-                                also takes a git URL
-  homie remote [user/repo]      show or change the bound repo
-  homie push [message]          commit everything in the source dir and push to the bound repo
-  homie add [-t tag] <path>...  manage files under $HOME; -t server stores them as the ##server variant
-  homie status | diff           show what apply would change
-  homie apply                   write files into $HOME (overwritten ones are backed up), install
-                                missing packages, run run_ scripts
-  homie update                  git pull + apply + upgrade packages
-  homie machine [name]          show or set this machine's name (selects ##variants)
-  homie pkgs                    list packages from .homie.toml for this machine
-  homie add-pkg <name> <spec>   add a package line and install it; spec is "gh:owner/repo"
-                                or an install command, e.g. homie add-pkg bat gh:sharkdp/bat
-  homie install [pkg...]        install or upgrade packages (no args: all)
-  homie upgrade                 same as install with no args
-  homie outdated                check which packages have new releases
-  homie uninstall <pkg...>      remove packages homie installed
-  homie self-update             update homie itself
-  homie cd                      print the source dir (cd "$(homie cd)")
-  homie git <args>              run git in the source dir`
-
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		sayErr(err)
 		os.Exit(1)
 	}
 }
@@ -118,7 +94,7 @@ func run(args []string) error {
 		fmt.Println(version)
 		return nil
 	}
-	fmt.Println(usage)
+	fmt.Println(help())
 	if cmd == "help" || cmd == "-h" || cmd == "--help" {
 		return nil
 	}
@@ -128,7 +104,7 @@ func run(args []string) error {
 func ui() error {
 	if !dirExists(srcDir()) {
 		repo := ""
-		if err := huh.NewInput().Title("No config repo yet. GitHub repo to bind, e.g. you/dotfiles (empty = local only):").Value(&repo).Run(); err != nil {
+		if err := ask(huh.NewInput().Title("No config repo yet").Description("GitHub repo to bind, e.g. you/dotfiles (empty = local only)").Value(&repo)); err != nil {
 			return err
 		}
 		if err := initSource(repo); err != nil {
@@ -136,22 +112,13 @@ func ui() error {
 		}
 	}
 	for {
+		fmt.Println(header())
+		var opts []huh.Option[string]
+		for _, m := range menu {
+			opts = append(opts, huh.NewOption(fmt.Sprintf("%-12s %s", m[1], m[2]), m[0]))
+		}
 		var choice string
-		err := huh.NewSelect[string]().Title(fmt.Sprintf("homie %s · machine: %s", version, machine())).Options(
-			huh.NewOption("Status", "status"),
-			huh.NewOption("Diff", "diff"),
-			huh.NewOption("Apply", "apply"),
-			huh.NewOption("Add a file", "add"),
-			huh.NewOption("Push changes to GitHub", "push"),
-			huh.NewOption("Install / upgrade packages", "install"),
-			huh.NewOption("Add a package", "add-pkg"),
-			huh.NewOption("Check for package updates", "outdated"),
-			huh.NewOption("Uninstall packages", "uninstall"),
-			huh.NewOption("Update everything (pull + apply + upgrade)", "update"),
-			huh.NewOption("Set machine name", "machine"),
-			huh.NewOption("Self-update homie", "self-update"),
-			huh.NewOption("Quit", "quit"),
-		).Value(&choice).Run()
+		err := ask(huh.NewSelect[string]().Title("What next?").Options(opts...).Value(&choice))
 		if errors.Is(err, huh.ErrUserAborted) || choice == "quit" {
 			return nil
 		}
@@ -159,10 +126,27 @@ func ui() error {
 			return err
 		}
 		if err := uiAction(choice); err != nil && !errors.Is(err, huh.ErrUserAborted) {
-			fmt.Fprintln(os.Stderr, "error:", err)
+			sayErr(err)
 		}
 		fmt.Println()
 	}
+}
+
+// menu entries: command, label, description (labels padded so descriptions line up).
+var menu = [][3]string{
+	{"status", "Status", "what apply would change"},
+	{"diff", "Diff", "line-by-line changes"},
+	{"apply", "Apply", "write files, install missing packages"},
+	{"add", "Add file", "start managing a file under $HOME"},
+	{"push", "Push", "commit and push to GitHub"},
+	{"install", "Install", "install or upgrade packages"},
+	{"add-pkg", "Add package", "add a line to .homie.toml"},
+	{"outdated", "Outdated", "check for new releases"},
+	{"uninstall", "Uninstall", "remove packages"},
+	{"update", "Update all", "pull + apply + upgrade"},
+	{"machine", "Machine", "set this machine's name"},
+	{"self-update", "Self-update", "update homie itself"},
+	{"quit", "Quit", ""},
 }
 
 // pickPkgs shows a multi-select of this machine's packages, filtered by keep.
@@ -186,13 +170,13 @@ func pickPkgs(title string, keep func(Pkg) bool) ([]string, error) {
 		return nil, errors.New("no packages")
 	}
 	var picked []string
-	err = huh.NewMultiSelect[string]().Title(title + " (space to toggle, enter to confirm)").Options(opts...).Value(&picked).Run()
+	err = ask(huh.NewMultiSelect[string]().Title(title).Description("space to toggle, enter to confirm").Options(opts...).Value(&picked))
 	return picked, err
 }
 
 func confirm(title string) bool {
 	ok := false
-	return huh.NewConfirm().Title(title).Value(&ok).Run() == nil && ok
+	return ask(huh.NewConfirm().Title(title).Value(&ok)) == nil && ok
 }
 
 func uiAction(choice string) error {
@@ -211,10 +195,10 @@ func uiAction(choice string) error {
 		return apply()
 	case "add":
 		p, tag := "", ""
-		err := huh.NewForm(huh.NewGroup(
-			huh.NewInput().Title("Path to add (e.g. ~/.zshrc):").Value(&p),
-			huh.NewInput().Title("Only for machine/OS (empty = all):").Value(&tag),
-		)).Run()
+		err := ask(
+			huh.NewInput().Title("Path to add").Placeholder("~/.bashrc").Value(&p),
+			huh.NewInput().Title("Only for machine/OS").Placeholder("empty = all").Value(&tag),
+		)
 		if err != nil || p == "" {
 			return err
 		}
@@ -224,7 +208,7 @@ func uiAction(choice string) error {
 		return add(p, tag)
 	case "push":
 		msg := "update dotfiles"
-		if err := huh.NewInput().Title("Commit message:").Value(&msg).Run(); err != nil {
+		if err := ask(huh.NewInput().Title("Commit message").Value(&msg)); err != nil {
 			return err
 		}
 		return push(msg)
@@ -236,10 +220,10 @@ func uiAction(choice string) error {
 		return install(picked)
 	case "add-pkg":
 		name, spec := "", ""
-		err := huh.NewForm(huh.NewGroup(
-			huh.NewInput().Title("Name:").Value(&name),
-			huh.NewInput().Title("gh:owner/repo or install command:").Value(&spec),
-		)).Run()
+		err := ask(
+			huh.NewInput().Title("Name").Placeholder("bat").Value(&name),
+			huh.NewInput().Title("Spec").Description("gh:owner/repo or an install command").Placeholder("gh:sharkdp/bat").Value(&spec),
+		)
 		if err != nil || name == "" || spec == "" {
 			return err
 		}
@@ -252,7 +236,7 @@ func uiAction(choice string) error {
 		return uninstall(picked)
 	case "machine":
 		m := machine()
-		if err := huh.NewInput().Title("Machine name (selects ##variants, e.g. mac / server):").Value(&m).Run(); err != nil || m == "" {
+		if err := ask(huh.NewInput().Title("Machine name").Description("selects ##variants, e.g. server").Value(&m)); err != nil || m == "" {
 			return err
 		}
 		return setMachine(m)

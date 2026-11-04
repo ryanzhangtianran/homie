@@ -80,7 +80,7 @@ func bind(repo string) error {
 	} else if err := git("remote", "add", "origin", url); err != nil {
 		return err
 	}
-	fmt.Println("bound to", url)
+	say(cOK, "✓", "bound", url)
 	if remoteExists(url) {
 		return nil
 	}
@@ -89,7 +89,7 @@ func bind(repo string) error {
 		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 		return c.Run()
 	}
-	fmt.Println("repo not found: create it on GitHub, then run `homie push`")
+	say(cWarn, "!", "note", "repo not found: create it on GitHub, then run `homie push`")
 	return nil
 }
 

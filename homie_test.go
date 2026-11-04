@@ -7,9 +7,12 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // sandbox gives each test its own $HOME and source dir.
@@ -301,6 +304,31 @@ func TestRepoURL(t *testing.T) {
 	} {
 		if got := repoURL(in); got != want {
 			t.Errorf("repoURL(%q) = %q", in, got)
+		}
+	}
+}
+
+func TestColumns(t *testing.T) {
+	out := columns([]string{"A", "LONG HEADER"}, [][]string{{dim.Render("x"), "1"}, {"yyyy", "2"}, {"z", "last"}})
+	lines := strings.Split(out, "\n")
+	if len(lines) != 5 || !strings.Contains(lines[4], "last") { // header + rule + 3 rows, last row kept
+		t.Fatalf("%q", lines)
+	}
+	col := func(l string) int { return lipgloss.Width(l) - len(strings.TrimLeft(stripANSI(l)[4:], " ")) }
+	if col(lines[2]) != col(lines[3]) || col(lines[3]) != col(lines[4]) {
+		t.Fatalf("second column not aligned:\n%s", out)
+	}
+}
+
+func stripANSI(s string) string { return regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(s, "") }
+
+func TestHeader(t *testing.T) {
+	_, src := sandbox(t, "server")
+	write(t, filepath.Join(src, ".homie.toml"), "[packages]\nx = \"gh:a/b\"\n", 0o644)
+	out := stripANSI(header())
+	for _, want := range []string{"machine", "server", "source", "remote", "not bound", "files", "up to date", "packages", "0/1 installed"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("header missing %q:\n%s", want, out)
 		}
 	}
 }

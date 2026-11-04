@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/charmbracelet/lipgloss"
 )
 
 //go:embed default.toml
@@ -282,7 +283,7 @@ func latest(p Pkg) (tag, url string, err error) {
 }
 
 func fetch(url string) ([]byte, error) {
-	fmt.Println("downloading", url)
+	say(cDim, "↓", "download", url)
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -297,7 +298,7 @@ func fetch(url string) ([]byte, error) {
 // installOne installs p, or upgrades it when a newer release exists. Install commands are simply rerun.
 func installOne(p Pkg) error {
 	if p.Script != "" {
-		fmt.Println("running installer for", p.Name)
+		say(cAccent, "▶", "install", p.Name+dim.Render("  (install command)"))
 		c := shell(p.Script)
 		c.Env = append(os.Environ(), "PATH="+binDir()+string(os.PathListSeparator)+os.Getenv("PATH"))
 		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -309,7 +310,7 @@ func installOne(p Pkg) error {
 		return err
 	}
 	if tag != "" && tag == st[p.Name].Tag && installed(p) {
-		fmt.Println(p.Name, tag, "is up to date")
+		say(cDim, "·", "up to date", fmt.Sprintf("%-10s %s", p.Name, tag))
 		return nil
 	}
 	if p.GH != "" {
@@ -354,7 +355,7 @@ func installOne(p Pkg) error {
 		}
 	}
 	sort.Strings(names)
-	fmt.Println("installed", p.Name, tag, strings.Join(names, " "))
+	say(cOK, "✓", "installed", fmt.Sprintf("%-10s %-10s %s", p.Name, tag, dim.Render(strings.Join(names, " "))))
 	st[p.Name] = pkgState{Tag: tag, Bins: names}
 	return saveState(st)
 }
@@ -370,7 +371,7 @@ func install(names []string) error {
 		}
 	}
 	if !slices.Contains(filepath.SplitList(os.Getenv("PATH")), binDir()) {
-		fmt.Printf("note: add %s to your PATH\n", binDir())
+		say(cWarn, "!", "note", "add "+binDir()+" to your PATH")
 	}
 	return nil
 }
@@ -427,7 +428,7 @@ func addPkg(name, spec string) error {
 		os.WriteFile(configFile(), old, 0o644)
 		return err
 	}
-	fmt.Println("added to", configFile()+":", strings.TrimSpace(line))
+	say(cOK, "+", "added", strings.TrimSpace(line)+dim.Render("  in "+configFile()))
 	return install([]string{name})
 }
 
@@ -556,7 +557,8 @@ func outdated() error {
 	if err != nil {
 		return err
 	}
-	st, n := loadState(), 0
+	st := loadState()
+	var rows [][]string
 	for _, p := range ps {
 		if p.Script != "" || st[p.Name].Tag == "" {
 			continue
@@ -566,13 +568,15 @@ func outdated() error {
 			return err
 		}
 		if tag != st[p.Name].Tag {
-			fmt.Printf("%-10s %s -> %s\n", p.Name, st[p.Name].Tag, tag)
-			n++
+			rows = append(rows, []string{p.Name, st[p.Name].Tag, lipgloss.NewStyle().Foreground(cOK).Render(tag)})
 		}
 	}
-	if n == 0 {
-		fmt.Println("all release packages are up to date (install-command packages update via `homie upgrade`)")
+	if len(rows) == 0 {
+		fmt.Println(box("Outdated", lipgloss.NewStyle().Foreground(cOK).Render("✓ all release packages are up to date")+
+			"\n"+dim.Render("install-command packages update via `homie upgrade`")))
+		return nil
 	}
+	grid("Outdated", []string{"PACKAGE", "INSTALLED", "LATEST"}, rows)
 	return nil
 }
 
@@ -609,12 +613,12 @@ func uninstall(names []string) error {
 				if err := os.RemoveAll(path); err != nil {
 					return err
 				}
-				fmt.Println("removed", path)
+				say(cOK, "✓", "removed", path)
 				removed = true
 			}
 		}
 		if !removed {
-			fmt.Println(n, "was not installed by homie, nothing removed")
+			say(cDim, "·", "skip", n+" was not installed by homie, nothing removed")
 		}
 		delete(st, n)
 	}
@@ -623,19 +627,24 @@ func uninstall(names []string) error {
 
 func listPkgs() error {
 	ps, err := packages()
+	if err != nil {
+		return err
+	}
 	st := loadState()
+	var rows [][]string
 	for _, p := range ps {
-		mark := " "
+		mark := dim.Render("·")
 		if installed(p) {
-			mark = "✓"
+			mark = lipgloss.NewStyle().Foreground(cOK).Render("✓")
 		}
 		spec := p.spec()
 		if len(spec) > 60 {
 			spec = spec[:57] + "..."
 		}
-		fmt.Printf("%s %-10s %-10s %s\n", mark, p.Name, st[p.Name].Tag, spec)
+		rows = append(rows, []string{mark, p.Name, st[p.Name].Tag, dim.Render(spec)})
 	}
-	return err
+	grid("Packages · machine "+machine(), []string{"", "PACKAGE", "VERSION", "SOURCE"}, rows)
+	return nil
 }
 
 var version = "dev" // set by -ldflags "-X main.version=vX.Y.Z"
@@ -660,7 +669,7 @@ func selfUpdate() error {
 		return err
 	}
 	if tag == version {
-		fmt.Println("homie", tag, "is up to date")
+		say(cDim, "·", "up to date", "homie "+tag)
 		return nil
 	}
 	data, err := fetch(url)
@@ -670,6 +679,6 @@ func selfUpdate() error {
 	if err := replaceFile(me, data, 0o755); err != nil {
 		return err
 	}
-	fmt.Println("updated homie", version, "->", tag)
+	say(cOK, "✓", "updated", "homie "+version+" → "+tag)
 	return nil
 }

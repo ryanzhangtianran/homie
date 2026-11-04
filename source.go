@@ -15,6 +15,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func home() string { h, _ := os.UserHomeDir(); return h }
@@ -212,13 +214,24 @@ func rel(p string) string { r, _ := filepath.Rel(home(), p); return r }
 
 func status() error {
 	es, err := changed()
+	if err != nil {
+		return err
+	}
+	title := "Status · machine " + machine()
+	if len(es) == 0 {
+		fmt.Println(box(title, lipgloss.NewStyle().Foreground(cOK).Render("✓ everything up to date")))
+		return nil
+	}
+	var rows [][]string
 	for _, e := range es {
-		fmt.Println(e.state, rel(e.dst))
+		st := lipgloss.NewStyle().Foreground(cOK).Render("+ new")
+		if e.state == "M" {
+			st = lipgloss.NewStyle().Foreground(cWarn).Render("~ changed")
+		}
+		rows = append(rows, []string{st, "~/" + rel(e.dst)})
 	}
-	if err == nil && len(es) == 0 {
-		fmt.Println("everything up to date (machine:", machine()+")")
-	}
-	return err
+	grid(title, []string{"STATE", "FILE"}, rows)
+	return nil
 }
 
 func diff() error {
@@ -238,7 +251,7 @@ func diff() error {
 			defer os.Remove(f.Name())
 			src = f.Name()
 		}
-		fmt.Println("---", rel(e.dst))
+		say(cAccent, "◆", "diff", "~/"+rel(e.dst))
 		c := exec.Command("git", "--no-pager", "diff", "--no-index", "--", old, src)
 		c.Stdout, c.Stderr = os.Stdout, os.Stderr
 		_ = c.Run() // exits 1 when files differ
@@ -287,10 +300,10 @@ func apply() error {
 		if err := writeFile(e); err != nil {
 			return err
 		}
-		fmt.Println("apply", rel(e.dst))
+		say(cOK, "✓", "apply", "~/"+rel(e.dst))
 	}
 	if backedUp {
-		fmt.Println("overwritten files backed up to", backup)
+		say(cDim, "↺", "backup", "overwritten files saved in "+backup)
 	}
 	if err := installMissing(); err != nil {
 		return err
@@ -311,7 +324,7 @@ func runScripts(scripts []entry) error {
 		if strings.HasPrefix(name, "run_onchange_") && hashes[name] == h {
 			continue
 		}
-		fmt.Println("run", name)
+		say(cAccent, "▶", "run", name)
 		f, err := os.CreateTemp("", "homie-*-"+name)
 		if err != nil {
 			return err
@@ -411,7 +424,7 @@ func add(path, tag string) error {
 			return err
 		}
 		r, _ := filepath.Rel(srcDir(), dst)
-		fmt.Println("add", rel(p), "->", r)
+		say(cOK, "+", "add", "~/"+rel(p)+dim.Render("  →  "+r))
 		return os.WriteFile(dst, data, 0o644)
 	})
 }
