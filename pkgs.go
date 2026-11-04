@@ -638,8 +638,8 @@ func listPkgs() error {
 			mark = lipgloss.NewStyle().Foreground(cOK).Render("✓")
 		}
 		spec := p.spec()
-		if len(spec) > 60 {
-			spec = spec[:57] + "..."
+		if len(spec) > 48 { // keeps the table inside the standard box width
+			spec = spec[:47] + "…"
 		}
 		rows = append(rows, []string{mark, p.Name, st[p.Name].Tag, dim.Render(spec)})
 	}

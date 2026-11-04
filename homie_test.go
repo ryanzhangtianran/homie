@@ -332,3 +332,22 @@ func TestHeader(t *testing.T) {
 		}
 	}
 }
+
+func TestBoxesShareWidth(t *testing.T) {
+	_, src := sandbox(t, "server")
+	write(t, filepath.Join(src, ".homie.toml"), "[packages]\nx = \"gh:a/b\"\n", 0o644)
+	want := boxWidth + 2
+	for name, out := range map[string]string{
+		"help": help(), "header": header(), "small": box("t", "x"),
+		"table": box("t", columns([]string{"A", "B"}, [][]string{{"1", "2"}})),
+	} {
+		for _, l := range strings.Split(out, "\n") {
+			if w := lipgloss.Width(l); w != want {
+				t.Fatalf("%s: line width %d, want %d: %q", name, w, want, stripANSI(l))
+			}
+		}
+	}
+	if w := lipgloss.Width(strings.Split(box("t", strings.Repeat("y", 100)), "\n")[0]); w != 104 {
+		t.Fatalf("box must grow for wide content, got %d", w)
+	}
+}

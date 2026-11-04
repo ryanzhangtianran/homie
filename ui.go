@@ -31,9 +31,14 @@ func sayErr(err error) {
 	fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(cErr).Render(fmt.Sprintf("✗ %-10s", "error"))+" "+err.Error())
 }
 
+// boxWidth is every frame's width including padding (80 columns with the border); the menu form matches it.
+// A box only grows when its content cannot fit.
+const boxWidth = 78
+
 // box frames body under a bold title.
 func box(title, body string) string {
-	return frame.Render(bold.Foreground(cAccent).Render(title) + "\n\n" + body)
+	t := bold.Foreground(cAccent).Render(title)
+	return frame.Width(max(lipgloss.Width(body)+2, lipgloss.Width(t)+2, boxWidth)).Render(t + "\n\n" + body)
 }
 
 // columns pads cells by display width so every column lines up; a header gets a rule under it.
@@ -71,7 +76,7 @@ func columns(header []string, rows [][]string) string {
 		for _, w := range widths {
 			total += w + 2
 		}
-		out = append(out, line(h), dim.Render(strings.Repeat("─", total-2)))
+		out = append(out, line(h), dim.Render(strings.Repeat("─", max(total-2, boxWidth-2)))) // spans the whole box
 	}
 	for _, r := range rows {
 		out = append(out, line(r))
@@ -90,7 +95,7 @@ var helpSections = []struct {
 	{"Dotfiles", [][]string{
 		{"homie", "interactive UI"},
 		{"status | diff", "what apply would change"},
-		{"apply", "write files (backups kept), install missing packages"},
+		{"apply", "write files, install missing packages"},
 		{"add [-t tag] <path>...", "manage files; -t server = ##server variant"},
 		{"machine [name]", "show or set this machine's name"},
 		{"update", "pull + apply + upgrade"},
@@ -104,7 +109,7 @@ var helpSections = []struct {
 	}},
 	{"Packages", [][]string{
 		{"pkgs", "list this machine's packages"},
-		{"add-pkg <name> <spec>", "add to .homie.toml and install (gh:owner/repo or a command)"},
+		{"add-pkg <name> <spec>", "add a package to .homie.toml and install it"},
 		{"install [pkg...]", "install or upgrade (no args: all)"},
 		{"upgrade", "upgrade all packages"},
 		{"outdated", "check for new releases"},
@@ -162,8 +167,7 @@ func header() string {
 		{dim.Render("files"), files},
 		{dim.Render("packages"), pk},
 	})
-	// at least as wide as the menu form below it (form width 64 + padding)
-	return frame.Width(max(lipgloss.Width(body)+2, 66)).Render(bold.Foreground(cAccent).Render("homie "+version) + "\n\n" + body)
+	return box("homie "+version, body)
 }
 
 func relHome(p string) (string, error) {
@@ -183,5 +187,5 @@ var theme = func() *huh.Theme {
 
 // ask runs fields as one framed form.
 func ask(fields ...huh.Field) error {
-	return huh.NewForm(huh.NewGroup(fields...)).WithTheme(theme).WithWidth(64).Run()
+	return huh.NewForm(huh.NewGroup(fields...)).WithTheme(theme).WithWidth(boxWidth - 2).Run()
 }
