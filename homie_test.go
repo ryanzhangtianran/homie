@@ -372,3 +372,42 @@ func TestUpgradeSkipsInstalledScripts(t *testing.T) {
 		t.Fatal("naming the package must rerun its install command")
 	}
 }
+
+func TestMenuSorted(t *testing.T) {
+	for i := 1; i < len(menu)-1; i++ {
+		if strings.ToLower(menu[i-1][1]) > strings.ToLower(menu[i][1]) {
+			t.Errorf("menu not alphabetical: %q before %q", menu[i-1][1], menu[i][1])
+		}
+	}
+	if menu[len(menu)-1][0] != "quit" {
+		t.Error("Quit must stay last")
+	}
+}
+
+func TestTheme(t *testing.T) {
+	sandbox(t, "server")
+	defer usePalette(palettes["catppuccin"])
+	if err := setTheme("nope"); err == nil {
+		t.Fatal("unknown theme accepted")
+	}
+	if err := setTheme("nord"); err != nil || cAccent != palettes["nord"].Accent {
+		t.Fatal(err)
+	}
+	usePalette(palettes["catppuccin"])
+	loadTheme() // reads the saved choice back
+	if cAccent != palettes["nord"].Accent {
+		t.Fatal("saved theme not loaded")
+	}
+}
+
+func TestPullLeavesPackagesAlone(t *testing.T) {
+	h, src := sandbox(t, "server")
+	write(t, filepath.Join(src, ".homie.toml"), "[packages]\ntool = 'echo x >> \"$HOME/ran\"'\n", 0o644)
+	write(t, filepath.Join(src, "dot_rc"), "v", 0o644)
+	if err := applyWith(false); err != nil {
+		t.Fatal(err)
+	}
+	if read(filepath.Join(h, ".rc")) != "v" || dirExists(filepath.Join(h, "ran")) {
+		t.Fatal("pull must write files and skip packages")
+	}
+}

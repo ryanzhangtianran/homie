@@ -10,7 +10,8 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	loadTheme()
+	if err := run(os.Args[1:]); err != nil && !errors.Is(err, huh.ErrUserAborted) { // Ctrl-C is not an error
 		sayErr(err)
 		os.Exit(1)
 	}
@@ -56,6 +57,17 @@ func run(args []string) error {
 		return diff()
 	case "apply":
 		return apply()
+	case "pull":
+		if err := git("pull", "--ff-only"); err != nil {
+			return err
+		}
+		return applyWith(false)
+	case "theme":
+		if len(rest) == 0 {
+			fmt.Println(strings.Join(themeNames, "\n"))
+			return nil
+		}
+		return setTheme(rest[0])
 	case "update":
 		if err := git("pull", "--ff-only"); err != nil {
 			return err
@@ -132,20 +144,23 @@ func ui() error {
 	}
 }
 
-// menu entries: command, label, description (labels padded so descriptions line up).
+// menu entries: command, label, description, alphabetical by label with Quit last
+// (labels are padded when rendered so the descriptions line up).
 var menu = [][3]string{
-	{"status", "Status", "what apply would change"},
-	{"diff", "Diff", "line-by-line changes"},
-	{"apply", "Apply", "write files, install missing packages"},
 	{"add", "Add file", "start managing a file under $HOME"},
-	{"push", "Push", "commit and push to GitHub"},
-	{"install", "Install", "install or upgrade packages"},
 	{"add-pkg", "Add package", "add a line to .homie.toml"},
-	{"outdated", "Outdated", "check for new releases"},
-	{"uninstall", "Uninstall", "remove packages"},
-	{"update", "Update all", "pull + apply + upgrade"},
+	{"apply", "Apply", "write files, install missing packages"},
+	{"diff", "Diff", "line-by-line changes"},
+	{"install", "Install", "install or upgrade packages"},
 	{"machine", "Machine", "set this machine's name"},
+	{"outdated", "Outdated", "check for new releases"},
+	{"pull", "Pull", "update dotfiles only (git pull + write files)"},
+	{"push", "Push", "commit and push to GitHub"},
 	{"self-update", "Self-update", "update homie itself"},
+	{"status", "Status", "what apply would change"},
+	{"theme", "Theme", "change the color scheme"},
+	{"uninstall", "Uninstall", "remove packages"},
+	{"update", "Update all", "pull + apply + upgrade packages"},
 	{"quit", "Quit", ""},
 }
 
@@ -234,6 +249,16 @@ func uiAction(choice string) error {
 			return err
 		}
 		return uninstall(picked)
+	case "theme":
+		var opts []huh.Option[string]
+		for _, n := range themeNames {
+			opts = append(opts, huh.NewOption(n, n))
+		}
+		name := ""
+		if err := ask(huh.NewSelect[string]().Title("Color scheme").Options(opts...).Value(&name)); err != nil {
+			return err
+		}
+		return setTheme(name)
 	case "machine":
 		m := machine()
 		if err := ask(huh.NewInput().Title("Machine name").Description("selects ##variants, e.g. server").Value(&m)); err != nil || m == "" {

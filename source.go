@@ -275,7 +275,10 @@ func writeFile(e entry) error {
 }
 
 // apply writes changed files (backing up what it overwrites), installs missing packages, then runs scripts.
-func apply() error {
+func apply() error { return applyWith(true) }
+
+// applyWith is apply; pkgs=false leaves packages alone (homie pull: dotfiles only).
+func applyWith(pkgs bool) error {
 	m := machine()
 	files, scripts, err := scan(m)
 	if err != nil {
@@ -305,8 +308,10 @@ func apply() error {
 	if backedUp {
 		say(cDim, "↺", "backup", "overwritten files saved in "+backup)
 	}
-	if err := installMissing(); err != nil {
-		return err
+	if pkgs {
+		if err := installMissing(); err != nil {
+			return err
+		}
 	}
 	return runScripts(scripts)
 }
