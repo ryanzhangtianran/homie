@@ -1,9 +1,8 @@
 package pkgs
 
 import (
+	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"path"
 	"regexp"
 	"strings"
@@ -96,23 +95,34 @@ func pickAsset(names []string, goos, goarch string) (string, error) {
 
 var assetHref = regexp.MustCompile(`/releases/download/[^/"]+/([^"]+)"`)
 
-// listAssets reads asset names from the release page GitHub's UI uses (no API token, no rate limit).
+// github and githubAPI are variables so tests can point them at a local server.
+var github, githubAPI = "https://github.com", "https://api.github.com"
+
+// listAssets reads asset names from the release page GitHub's UI uses (no token, no rate limit). That page is
+// undocumented, so when it yields nothing the public API (60 requests/hour without a token) is the fallback.
 func listAssets(repo, tag string) ([]string, error) {
-	resp, err := http.Get("https://github.com/" + repo + "/releases/expanded_assets/" + tag)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
 	var names []string
-	for _, m := range assetHref.FindAllSubmatch(data, -1) {
-		names = append(names, string(m[1]))
+	if data, err := get(github + "/" + repo + "/releases/expanded_assets/" + tag); err == nil {
+		for _, m := range assetHref.FindAllSubmatch(data, -1) {
+			names = append(names, string(m[1]))
+		}
+	}
+	if len(names) > 0 {
+		return names, nil
+	}
+	data, err := get(githubAPI + "/repos/" + repo + "/releases/tags/" + tag)
+	if err != nil {
+		return nil, err
+	}
+	var rel struct{ Assets []struct{ Name string } }
+	if err := json.Unmarshal(data, &rel); err != nil {
+		return nil, fmt.Errorf("%s release %s: %w", repo, tag, err)
+	}
+	for _, a := range rel.Assets {
+		names = append(names, a.Name)
 	}
 	if len(names) == 0 {
-		return nil, fmt.Errorf("no assets in %s release %s (status %s)", repo, tag, resp.Status)
+		return nil, fmt.Errorf("no assets in %s release %s", repo, tag)
 	}
 	return names, nil
 }

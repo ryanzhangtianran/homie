@@ -5,8 +5,13 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/ryanzhangtianran/homie/internal/config"
@@ -166,5 +171,99 @@ func TestUpgradeSkipsInstalledScripts(t *testing.T) {
 	}
 	if read(filepath.Join(h, "ran")) != "x\n" {
 		t.Fatal("naming the package must rerun its install command")
+	}
+}
+
+func tarGz(t *testing.T, files map[string]int64) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	gz := gzip.NewWriter(&b)
+	tw := tar.NewWriter(gz)
+	for name, mode := range files {
+		tw.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: 1, Typeflag: tar.TypeReg})
+		tw.Write([]byte("x"))
+	}
+	tw.Close()
+	gz.Close()
+	return b.Bytes()
+}
+
+// One failing download must not stop the next package, and a good one ends up in ~/.local/bin with its state.
+func TestInstallFromURL(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("exec bits")
+	}
+	archive := tarGz(t, map[string]int64{"tool-1/tool": 0o755, "tool-1/README": 0o644})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tool.tar.gz" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(archive)
+	}))
+	defer srv.Close()
+	_, src := sandbox(t, "server")
+	write(t, filepath.Join(src, ".homie.toml"), fmt.Sprintf("[packages.aaa]\nurl = %q\n[packages.tool]\nurl = %q\n",
+		srv.URL+"/gone.tar.gz", srv.URL+"/tool.tar.gz"), 0o644)
+	err := Install(nil)
+	if err == nil || !strings.Contains(err.Error(), "1 of 2") {
+		t.Fatalf("want one failure reported, got %v", err)
+	}
+	fi, statErr := os.Stat(filepath.Join(binDir(), "tool"))
+	if statErr != nil || fi.Mode()&0o111 == 0 {
+		t.Fatal("tool not installed (or not executable) after the other package failed")
+	}
+	if got := loadState()["tool"].Bins; len(got) != 1 || got[0] != "tool" {
+		t.Fatalf("state bins = %v", got)
+	}
+	if config.Exists(filepath.Join(binDir(), "README")) {
+		t.Fatal("non-executable archive files must not be installed")
+	}
+}
+
+func TestListAssetsFallsBackToAPI(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/repos/o/r/releases/tags/v1") {
+			w.Write([]byte(`{"assets":[{"name":"r-linux.tar.gz"},{"name":"r-darwin.tar.gz"}]}`))
+			return
+		}
+		w.Write([]byte("<html>GitHub changed this page</html>"))
+	}))
+	defer srv.Close()
+	oldWeb, oldAPI := github, githubAPI
+	github, githubAPI = srv.URL, srv.URL+"/api"
+	defer func() { github, githubAPI = oldWeb, oldAPI }()
+	names, err := listAssets("o/r", "v1")
+	if err != nil || len(names) != 2 || names[0] != "r-linux.tar.gz" {
+		t.Fatalf("%v %v", names, err)
+	}
+}
+
+func TestScriptPackageBins(t *testing.T) {
+	sandbox(t, "server")
+	p := config.Pkg{Name: "rust", Script: "true", Bins: []string{"homie-test-cargo"}}
+	if Installed(p) {
+		t.Fatal("not installed yet")
+	}
+	write(t, filepath.Join(binDir(), exe("homie-test-cargo")), "", 0o755)
+	if !Installed(p) {
+		t.Fatal("bins[0] names the program to look for")
+	}
+}
+
+func TestDamagedStateIsReported(t *testing.T) {
+	sandbox(t, "server")
+	write(t, filepath.Join(config.StateDir(), "packages.json"), `{"half": {"tag": "v1`, 0o644)
+	if got := loadState(); len(got) != 0 {
+		t.Fatalf("damaged state should read as empty, got %v", got)
+	}
+	if err := config.ReadJSON("packages.json", &map[string]pkgState{}); err == nil {
+		t.Fatal("damaged state must be an error for the caller")
+	}
+	if err := saveState(map[string]pkgState{"a": {Tag: "v2"}}); err != nil || loadState()["a"].Tag != "v2" {
+		t.Fatal(err)
+	}
+	if config.Exists(filepath.Join(config.StateDir(), "packages.json.tmp")) {
+		t.Fatal("temp file left behind")
 	}
 }

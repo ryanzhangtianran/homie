@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -228,6 +229,12 @@ func writeFile(e entry) error {
 			return err
 		}
 	}
+	if fi, err := os.Lstat(e.dst); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		// replace the link itself; writing through it would change the file it points to (stow-style setups)
+		if err := os.Remove(e.dst); err != nil {
+			return err
+		}
+	}
 	if err := os.WriteFile(e.dst, e.data, e.mode); err != nil {
 		return err
 	}
@@ -268,12 +275,22 @@ func ApplyWith(withPkgs bool) error {
 	if backedUp {
 		ui.Say(ui.Muted, "↺", "backup", "overwritten files saved in "+backup)
 	}
-	if withPkgs {
-		if err := pkgs.InstallMissing(); err != nil {
-			return err
+	var pkgErr error
+	if withPkgs { // a failed package must not keep the scripts from running
+		pkgErr = pkgs.InstallMissing()
+	}
+	return errors.Join(pkgErr, runScripts(scripts))
+}
+
+// reserved reports names that would not survive the trip into the source repo and back:
+// ~/run_x.sh would be executed by apply instead of copied, ~/private_notes would come back as ~/notes.
+func reserved(name string, file, top bool) bool {
+	for _, p := range []string{"dot_", "private_", "executable_"} {
+		if strings.HasPrefix(name, p) {
+			return true
 		}
 	}
-	return runScripts(scripts)
+	return strings.Contains(name, "##") || file && strings.HasSuffix(name, ".tmpl") || file && top && strings.HasPrefix(name, "run_")
 }
 
 // sourcePath picks the source path for a home-relative target, reusing source names that already exist
@@ -283,6 +300,10 @@ func sourcePath(target, tag string) (string, error) {
 	dir, tdir := config.SrcDir(), config.Home()
 	for i, part := range parts {
 		last := i == len(parts)-1
+		if reserved(part, last, i == 0) {
+			return "", fmt.Errorf("can't manage %s: %q would be read as a homie source name "+
+				"(dot_/private_/executable_ prefixes, ##tags, .tmpl, or run_ scripts at the top)", target, part)
+		}
 		tdir = filepath.Join(tdir, part)
 		info, err := os.Stat(tdir)
 		if err != nil {

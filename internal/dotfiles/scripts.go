@@ -17,7 +17,10 @@ import (
 
 // runScripts runs run_* every apply and run_onchange_* only when its rendered content changed.
 func runScripts(scripts []entry) error {
-	hashes := config.LoadJSON("scripts.json")
+	hashes := map[string]string{}
+	if err := config.ReadJSON("scripts.json", &hashes); err != nil {
+		ui.Say(ui.Warn, "!", "note", err.Error()+"; run_onchange_ scripts will run again")
+	}
 	for _, s := range scripts {
 		name := filepath.Base(s.dst)
 		if (runtime.GOOS == "windows") != strings.HasSuffix(name, ".ps1") {
@@ -51,7 +54,7 @@ func runScripts(scripts []entry) error {
 			return fmt.Errorf("%s: %w", name, err)
 		}
 		hashes[name] = h
-		if err := config.SaveJSON("scripts.json", hashes); err != nil {
+		if err := config.WriteJSON("scripts.json", hashes); err != nil {
 			return err
 		}
 	}

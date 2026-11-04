@@ -189,7 +189,7 @@ func header() string {
 		pk = lipgloss.NewStyle().Foreground(ui.Warn).Render(pk)
 	}
 	src := config.SrcDir()
-	if r, err := relHome(src); err == nil {
+	if r := dotfiles.Rel(src); !strings.HasPrefix(r, "..") {
 		src = "~/" + r
 	}
 	body := ui.Columns(nil, [][]string{
@@ -200,12 +200,4 @@ func header() string {
 		{ui.Dim.Render("packages"), pk},
 	})
 	return ui.Box("homie "+version, body)
-}
-
-func relHome(p string) (string, error) {
-	r := dotfiles.Rel(p)
-	if strings.HasPrefix(r, "..") {
-		return "", fmt.Errorf("outside home")
-	}
-	return r, nil
 }

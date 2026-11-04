@@ -1,7 +1,6 @@
 package pkgs
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ryanzhangtianran/homie/internal/config"
@@ -67,18 +67,13 @@ type pkgState struct {
 
 func loadState() map[string]pkgState {
 	m := map[string]pkgState{}
-	data, _ := os.ReadFile(filepath.Join(config.StateDir(), "packages.json"))
-	_ = json.Unmarshal(data, &m)
+	if err := config.ReadJSON("packages.json", &m); err != nil {
+		ui.Say(ui.Warn, "!", "note", err.Error()+"; treating every package as not installed")
+	}
 	return m
 }
 
-func saveState(m map[string]pkgState) error {
-	data, _ := json.MarshalIndent(m, "", "  ")
-	if err := os.MkdirAll(config.StateDir(), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(config.StateDir(), "packages.json"), data, 0o644)
-}
+func saveState(m map[string]pkgState) error { return config.WriteJSON("packages.json", m) }
 
 // ownBins lists the executables p owns in ~/.local/bin: configured ones, else what the last install put there.
 func ownBins(p config.Pkg, st map[string]pkgState) []string {
@@ -90,8 +85,12 @@ func ownBins(p config.Pkg, st map[string]pkgState) []string {
 
 func Installed(p config.Pkg) bool {
 	if p.Script != "" { // installed by the vendor's script, wherever it puts things
-		_, err := exec.LookPath(p.Name)
-		return err == nil || config.Exists(filepath.Join(binDir(), exe(p.Name)))
+		prog := p.Name // bins = ["cargo"] names the program when it differs from the package
+		if len(p.Bins) > 0 {
+			prog = p.Bins[0]
+		}
+		_, err := exec.LookPath(prog)
+		return err == nil || config.Exists(filepath.Join(binDir(), exe(prog)))
 	}
 	bins := ownBins(p, loadState())
 	for _, b := range bins {
@@ -124,10 +123,29 @@ func expand(s, tag string) string {
 
 var ghRelease = regexp.MustCompile(`^https://github\.com/([^/]+/[^/]+)/releases/`)
 
+// Without a timeout a stalled connection would hang homie forever; downloads get minutes, lookups seconds.
+var (
+	client      = &http.Client{Timeout: 10 * time.Minute}
+	quickClient = &http.Client{Timeout: 30 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+)
+
+// get fetches url and fails on any status but 200.
+func get(url string) ([]byte, error) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("%s: %s", url, resp.Status)
+	}
+	return io.ReadAll(resp.Body)
+}
+
 // latestTag reads the tag from GitHub's /releases/latest redirect (no API token, no rate limit).
 func latestTag(repo string) (string, error) {
-	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := c.Head("https://github.com/" + repo + "/releases/latest")
+	resp, err := quickClient.Head(github + "/" + repo + "/releases/latest")
 	if err != nil {
 		return "", err
 	}
@@ -163,15 +181,7 @@ func latest(p config.Pkg) (tag, url string, err error) {
 
 func fetch(url string) ([]byte, error) {
 	ui.Say(ui.Muted, "↓", "download", url)
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("%s: %s", url, resp.Status)
-	}
-	return io.ReadAll(resp.Body)
+	return get(url)
 }
 
 // installOne installs p, or upgrades it when a newer release exists. Install commands are rerun.
@@ -201,7 +211,7 @@ func installOne(p config.Pkg) error {
 		if err != nil {
 			return err
 		}
-		url = "https://github.com/" + p.GH + "/releases/download/" + tag + "/" + asset
+		url = github + "/" + p.GH + "/releases/download/" + tag + "/" + asset
 	}
 	data, err := fetch(url)
 	if err != nil {
@@ -244,6 +254,7 @@ func Install(names []string) error {
 	if err != nil {
 		return err
 	}
+	var errs []error // one failed download must not keep the other packages from installing
 	for _, p := range ps {
 		// install commands (claude, codex, ...) redownload everything and those tools update themselves,
 		// so a bulk upgrade only runs them when missing; naming the package reruns it
@@ -252,11 +263,16 @@ func Install(names []string) error {
 			continue
 		}
 		if err := installOne(p); err != nil {
-			return fmt.Errorf("%s: %w", p.Name, err)
+			err = fmt.Errorf("%s: %w", p.Name, err)
+			ui.SayErr(err)
+			errs = append(errs, err)
 		}
 	}
 	if !slices.Contains(filepath.SplitList(os.Getenv("PATH")), binDir()) {
 		ui.Say(ui.Warn, "!", "note", "add "+binDir()+" to your PATH")
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%d of %d packages failed (see above)", len(errs), len(ps))
 	}
 	return nil
 }

@@ -23,7 +23,9 @@ uv       = "gh:astral-sh/uv"
 # Table form, only when one line is not enough:
 #   on."<os>" / on."<os>/<arch>" / on."<machine>"  a different spec (or fields) there
 #   only = ["server", "darwin"]                     install only on these machines/OSes
-#   bins = ["rg"]                                   pick executables instead of taking all
+#   bins = ["rg"]                                   pick executables instead of taking all;
+#                                                   for an install command: the program it
+#                                                   installs, e.g. rust = rustup with bins = ["cargo"]
 #   url = "https://.../tool-{version}-{os}_{arch}.tar.gz"   when the automatic pick is wrong
 #   files = { "geoip.dat" = ".local/share/x/geoip.dat" }   extra archive files to install
 #   remove = [".local/share/x"]                     extra paths `homie uninstall` deletes

@@ -131,3 +131,40 @@ func TestPullLeavesPackagesAlone(t *testing.T) {
 		t.Fatal("pull must write files and skip packages")
 	}
 }
+
+func TestAddRejectsReservedNames(t *testing.T) {
+	h, src := sandbox(t, "server")
+	for _, name := range []string{"run_cleanup.sh", "private_notes.txt", "dot_x", "a##b", "x.tmpl"} {
+		write(t, filepath.Join(h, name), "x", 0o644)
+		if err := Add(filepath.Join(h, name), ""); err == nil {
+			t.Errorf("%s must be refused", name)
+		}
+	}
+	write(t, filepath.Join(h, ".config", "run_ok.sh"), "x", 0o644) // run_ only matters at the top
+	if err := Add(filepath.Join(h, ".config", "run_ok.sh"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(src); len(entries) != 1 {
+		t.Fatalf("refused files were still copied: %v", entries)
+	}
+}
+
+func TestApplyReplacesSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges")
+	}
+	h, src := sandbox(t, "server")
+	write(t, filepath.Join(src, "dot_rc"), "new", 0o644)
+	other := filepath.Join(h, "stow", "rc")
+	write(t, other, "theirs", 0o644)
+	os.Symlink(other, filepath.Join(h, ".rc"))
+	if err := ApplyWith(false); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Lstat(filepath.Join(h, ".rc")); fi.Mode()&os.ModeSymlink != 0 || read(filepath.Join(h, ".rc")) != "new" {
+		t.Fatal("~/.rc should now be a plain file with the new content")
+	}
+	if read(other) != "theirs" {
+		t.Fatal("apply wrote through the symlink into another file")
+	}
+}
