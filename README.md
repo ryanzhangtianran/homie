@@ -9,7 +9,11 @@ macOS / Linux / Windows, never needs sudo.
     irm https://raw.githubusercontent.com/ryanzhangtianran/homie/main/scripts/install.ps1 | iex          # Windows
     # or: go install github.com/ryanzhangtianran/homie@latest
 
-Run `homie` for the interactive UI; `homie help` lists commands.
+Run `homie` for the full-screen UI: a menu on the left and the result on the right. It follows the
+window size, and below 90 columns the menu and the result take turns on screen (enter / esc).
+Reports (status, diff, packages, outdated) show up in place. Anything that runs other programs
+(apply, install, push, pull, update) gets the plain terminal while it runs, so git can ask for a
+password, then Enter brings the UI back. `homie help` lists the commands for scripts.
 
 ## Bind your GitHub repo
 

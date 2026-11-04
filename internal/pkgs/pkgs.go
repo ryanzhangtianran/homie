@@ -354,7 +354,7 @@ func Outdated() error {
 		}
 	}
 	if len(rows) == 0 {
-		fmt.Println(ui.Box("Outdated", lipgloss.NewStyle().Foreground(ui.OK).Render("✓ all release packages are up to date")+
+		fmt.Fprintln(ui.Out, ui.Box("Outdated", lipgloss.NewStyle().Foreground(ui.OK).Render("✓ all release packages are up to date")+
 			"\n"+ui.Dim.Render("install-command packages update themselves, or: homie install <name>")))
 		return nil
 	}

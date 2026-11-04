@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -180,7 +181,7 @@ func Status() error {
 	}
 	title := "Status · machine " + config.Machine()
 	if len(es) == 0 {
-		fmt.Println(ui.Box(title, lipgloss.NewStyle().Foreground(ui.OK).Render("✓ everything up to date")))
+		fmt.Fprintln(ui.Out, ui.Box(title, lipgloss.NewStyle().Foreground(ui.OK).Render("✓ everything up to date")))
 		return nil
 	}
 	var rows [][]string
@@ -213,8 +214,12 @@ func Diff() error {
 			src = f.Name()
 		}
 		ui.Say(ui.Accent, "◆", "diff", "~/"+Rel(e.dst))
-		c := exec.Command("git", "--no-pager", "diff", "--no-index", "--", old, src)
-		c.Stdout, c.Stderr = os.Stdout, os.Stderr
+		color := "--color=auto"
+		if ui.Out != io.Writer(os.Stdout) { // captured for the full-screen UI: keep the colors
+			color = "--color=always"
+		}
+		c := exec.Command("git", "--no-pager", "diff", color, "--no-index", "--", old, src)
+		c.Stdout, c.Stderr = ui.Out, ui.Out
 		_ = c.Run() // exits 1 when files differ
 	}
 	return err

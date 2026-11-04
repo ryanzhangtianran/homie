@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,10 +36,10 @@ var palettes = map[string]palette{
 var ThemeNames = []string{"catppuccin", "nord", "terminal", "plain"}
 
 var (
-	Muted, cBorder, Accent, cTitle, OK, Warn, Err, cText lipgloss.Color
+	Muted, cBorder, Accent, TitleColor, OK, Warn, Err, Text lipgloss.Color
 
-	frame, Bold, Dim lipgloss.Style
-	theme            *huh.Theme
+	Frame, Bold, Dim lipgloss.Style
+	Theme            *huh.Theme
 )
 
 func init() { usePalette(palettes["catppuccin"]) }
@@ -70,40 +71,40 @@ func SetTheme(name string) error {
 }
 
 func usePalette(p palette) {
-	Muted, cBorder, Accent, cTitle, OK, Warn, Err, cText = p.Muted, p.Border, p.Accent, p.Title, p.OK, p.Warn, p.Err, p.Text
-	frame = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cBorder).Padding(0, 1)
+	Muted, cBorder, Accent, TitleColor, OK, Warn, Err, Text = p.Muted, p.Border, p.Accent, p.Title, p.OK, p.Warn, p.Err, p.Text
+	Frame = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cBorder).Padding(0, 1)
 	Bold = lipgloss.NewStyle().Bold(true)
 	Dim = lipgloss.NewStyle().Foreground(Muted)
-	theme = huhTheme()
+	Theme = huhTheme()
 }
 
 // huhTheme builds the form theme from the palette: the whole form is framed, fields have no side bar.
 func huhTheme() *huh.Theme {
 	t := huh.ThemeBase()
 	fg := func(c lipgloss.Color) lipgloss.Style { return lipgloss.NewStyle().Foreground(c) }
-	t.Form.Base = frame
+	t.Form.Base = Frame
 	f := &t.Focused
 	f.Base, f.Card = lipgloss.NewStyle(), lipgloss.NewStyle()
-	f.Title = fg(cTitle).Bold(true)
+	f.Title = fg(TitleColor).Bold(true)
 	f.Description = fg(Muted)
 	f.SelectSelector = fg(Accent).SetString("› ")
-	f.Option, f.UnselectedOption = fg(cText), fg(cText)
+	f.Option, f.UnselectedOption = fg(Text), fg(Text)
 	f.SelectedOption = fg(Accent).Bold(true)
 	f.MultiSelectSelector = fg(Accent).SetString("› ")
 	f.SelectedPrefix = fg(OK).SetString("✓ ")
 	f.UnselectedPrefix = fg(Muted).SetString("• ")
 	f.ErrorIndicator, f.ErrorMessage = fg(Err).SetString(" *"), fg(Err)
 	f.FocusedButton = lipgloss.NewStyle().Padding(0, 2).MarginRight(1).Foreground(lipgloss.Color("#232634")).Background(Accent)
-	f.BlurredButton = lipgloss.NewStyle().Padding(0, 2).MarginRight(1).Foreground(cText).Background(cBorder)
+	f.BlurredButton = lipgloss.NewStyle().Padding(0, 2).MarginRight(1).Foreground(Text).Background(cBorder)
 	f.Next = f.FocusedButton
 	f.TextInput.Cursor, f.TextInput.Prompt = fg(Accent), fg(Accent)
-	f.TextInput.Placeholder, f.TextInput.Text = fg(Muted), fg(cText)
+	f.TextInput.Placeholder, f.TextInput.Text = fg(Muted), fg(Text)
 	t.Blurred = t.Focused
 	t.Blurred.Title = fg(Muted)
 	t.Blurred.SelectSelector = lipgloss.NewStyle().SetString("  ")
 	t.Blurred.MultiSelectSelector = lipgloss.NewStyle().SetString("  ")
 	t.Group.Title, t.Group.Description = t.Focused.Title, t.Focused.Description
-	t.Help.ShortKey, t.Help.FullKey = fg(cText), fg(cText)
+	t.Help.ShortKey, t.Help.FullKey = fg(Text), fg(Text)
 	t.Help.ShortDesc, t.Help.FullDesc = fg(Muted), fg(Muted)
 	t.Help.ShortSeparator, t.Help.FullSeparator = fg(cBorder), fg(cBorder)
 	return t
@@ -111,7 +112,7 @@ func huhTheme() *huh.Theme {
 
 // Say prints one progress line: a colored icon and a fixed-width verb, so messages line up.
 func Say(c lipgloss.Color, icon, verb, msg string) {
-	fmt.Println(lipgloss.NewStyle().Foreground(c).Render(fmt.Sprintf("%s %-10s", icon, verb)) + " " + msg)
+	fmt.Fprintln(Out, lipgloss.NewStyle().Foreground(c).Render(fmt.Sprintf("%s %-10s", icon, verb))+" "+msg)
 }
 
 func SayErr(err error) {
@@ -120,12 +121,15 @@ func SayErr(err error) {
 
 // BoxWidth is every frame's width including padding (80 columns with the border); the menu form matches it.
 // A box only grows when its content cannot fit.
-const BoxWidth = 78
+var BoxWidth = 78
+
+// Out is where reports (status, package lists, progress lines) go; the full-screen UI captures it.
+var Out io.Writer = os.Stdout
 
 // Box frames body under a bold title.
 func Box(title, body string) string {
 	t := Bold.Foreground(Accent).Render(title)
-	return frame.Width(max(lipgloss.Width(body)+2, lipgloss.Width(t)+2, BoxWidth)).Render(t + "\n\n" + body)
+	return Frame.Width(max(lipgloss.Width(body)+2, lipgloss.Width(t)+2, BoxWidth)).Render(t + "\n\n" + body)
 }
 
 // Columns pads cells by display width so every column lines up; a header gets a rule under it.
@@ -172,10 +176,10 @@ func Columns(header []string, rows [][]string) string {
 }
 
 func Grid(title string, header []string, rows [][]string) {
-	fmt.Println(Box(title, Columns(header, rows)))
+	fmt.Fprintln(Out, Box(title, Columns(header, rows)))
 }
 
 // Ask runs fields as one framed form.
 func Ask(fields ...huh.Field) error {
-	return huh.NewForm(huh.NewGroup(fields...)).WithTheme(theme).WithWidth(BoxWidth - 2).Run()
+	return huh.NewForm(huh.NewGroup(fields...)).WithTheme(Theme).WithWidth(BoxWidth - 2).Run()
 }
