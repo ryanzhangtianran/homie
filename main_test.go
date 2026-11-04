@@ -1,9 +1,13 @@
 package main
 
 import (
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -61,7 +65,7 @@ func TestLayoutFitsWindow(t *testing.T) {
 	for _, size := range [][2]int{{60, 16}, {80, 24}, {100, 30}, {160, 50}, {240, 70}} {
 		var tm tea.Model = newModel()
 		tm, _ = tm.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-		tm, _ = tm.Update(capture("Status", "status", dotfiles.Status)()) // a real report in the content pane
+		tm, _ = tm.Update(capture("Status", "status", tm.(model).reportWidth(), dotfiles.Status)()) // a real report
 		check := func(what string) {
 			lines := strings.Split(tm.View(), "\n")
 			if len(lines) > size[1] {
@@ -84,5 +88,55 @@ func TestLayoutFitsWindow(t *testing.T) {
 		if tm.(model).form != nil || tm.(model).content {
 			t.Fatal("esc must close the form and go back to the menu")
 		}
+	}
+}
+
+// A resize that reruns a report while another is still running must not leave ui.Out on a dead buffer
+// (that swallowed the progress output of the next install).
+func TestOverlappingCaptures(t *testing.T) {
+	// the first report finishes before the second: that order used to leave ui.Out on the first one's buffer
+	slow := capture("A", "", 50, func() error { time.Sleep(30 * time.Millisecond); ui.Say(ui.OK, "·", "a", "x"); return nil })
+	later := capture("B", "", 60, func() error { time.Sleep(60 * time.Millisecond); return nil })
+	var wg sync.WaitGroup
+	wg.Add(2)
+	var a, b tea.Msg
+	go func() { a = slow(); wg.Done() }()
+	time.Sleep(10 * time.Millisecond)
+	go func() { b = later(); wg.Done() }()
+	wg.Wait()
+	if ui.Out != io.Writer(os.Stdout) || ui.BoxWidth != 78 {
+		t.Fatalf("shared output/width not restored: %T %d", ui.Out, ui.BoxWidth)
+	}
+	if !strings.Contains(a.(contentMsg).body, "a") || strings.Contains(b.(contentMsg).body, "a ") {
+		t.Fatalf("reports mixed up: %q / %q", a.(contentMsg).body, b.(contentMsg).body)
+	}
+}
+
+// Resize events are debounced: only the settled width redraws the report, and a height-only change none.
+func TestResizeDebounce(t *testing.T) {
+	_, src := sandbox(t, "server")
+	write(t, filepath.Join(src, ".homie.toml"), "", 0o644)
+	var tm tea.Model = newModel()
+	tm, cmd := tm.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if cmd == nil {
+		t.Fatal("first size must draw the report right away")
+	}
+	tm, _ = tm.Update(cmd())
+	tm, cmd = tm.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	if _, waits := cmd().(resizedMsg); !waits {
+		t.Fatal("a resize during use must wait for the width to settle, not redraw at once")
+	}
+	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 130, Height: 30}) // still dragging
+	if _, rerun := tm.Update(resizedMsg{120}); rerun != nil {
+		t.Fatal("a width the window already left must not redraw")
+	}
+	if _, rerun := tm.Update(resizedMsg{130}); rerun == nil {
+		t.Fatal("the settled width must redraw")
+	}
+	m := tm.(model)
+	tm, _ = tm.Update(m.rerun()()) // draw at 130
+	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 130, Height: 40})
+	if _, rerun := tm.Update(resizedMsg{130}); rerun != nil {
+		t.Fatal("a height-only change must not redraw the report")
 	}
 }

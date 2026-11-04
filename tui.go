@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -56,7 +58,8 @@ func menuLoop() error {
 			return err
 		}
 	}
-	_, err := tea.NewProgram(newModel(), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	// no mouse mode: it would stop the terminal from selecting text to copy; pgup/pgdn scroll instead
+	_, err := tea.NewProgram(newModel(), tea.WithAltScreen()).Run()
 	return err
 }
 
@@ -71,10 +74,15 @@ type model struct {
 	submit  func() tea.Cmd
 	head    string
 	busy    bool
+	drawn   int // width the current report was drawn at
 }
 
 type (
-	contentMsg struct{ title, view, body string }
+	contentMsg struct {
+		title, view, body string
+		width             int
+	}
+	resizedMsg struct{ width int } // the window stopped changing width for a moment
 	doneMsg    struct {
 		title string
 		err   error
@@ -82,10 +90,10 @@ type (
 )
 
 func newModel() model {
-	return model{head: summary(), vp: viewport.New(0, 0)}
+	return model{head: summary(), vp: viewport.New(0, 0), view: "status", title: "Status"}
 }
 
-func (m model) Init() tea.Cmd { return capture("Status", "status", dotfiles.Status) }
+func (m model) Init() tea.Cmd { return nil } // the first WindowSizeMsg draws Status at the real width
 
 func (m model) wide() bool { return m.w >= wideMin }
 
@@ -100,9 +108,11 @@ func (m model) bodyHeight() int {
 	return max(m.h-lipgloss.Height(m.header())-2, 3) // header, then body, hint line and key line
 }
 
-// layout sizes everything from the window; captured reports are drawn at the content width.
+// reportWidth is the box width reports are drawn at so they fill the content pane.
+func (m model) reportWidth() int { return max(m.contentWidth()-2, 40) }
+
+// layout sizes everything from the window.
 func (m *model) layout() {
-	ui.BoxWidth = max(m.contentWidth()-2, 40)
 	m.vp.Width, m.vp.Height = m.contentWidth(), m.bodyHeight()-1 // one line for the pane title
 	if m.form != nil {
 		m.form = m.form.WithWidth(max(m.contentWidth()-4, 30))
@@ -112,15 +122,23 @@ func (m *model) layout() {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		first := m.w == 0
 		m.w, m.h = msg.Width, msg.Height
 		m.layout()
-		if m.view != "" && m.view != "outdated" && m.form == nil && !m.busy { // redraw reports at the new width
+		if first {
+			return m, m.rerun()
+		}
+		// a drag sends dozens of these: redraw the report once the width has settled
+		w := m.w
+		return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return resizedMsg{w} })
+	case resizedMsg:
+		if msg.width == m.w && m.reportWidth() != m.drawn && m.view != "outdated" && m.form == nil && !m.busy {
 			return m, m.rerun()
 		}
 		return m, nil
 	case contentMsg:
 		m.head = summary() // whatever just ran may have changed files, packages or the theme
-		m.busy, m.title, m.view = false, msg.title, msg.view
+		m.busy, m.title, m.view, m.drawn = false, msg.title, msg.view, msg.width
 		m.vp.SetContent(msg.body)
 		m.vp.GotoTop()
 		return m, nil
@@ -200,7 +218,7 @@ func (m *model) rerun() tea.Cmd {
 // choose runs a menu entry: reports render into the content pane, forms open there, and anything that
 // runs other programs (git, installers) gets the real terminal for a moment.
 func (m *model) choose(id string) tea.Cmd {
-	label := id
+	label, w := id, m.reportWidth()
 	for _, e := range menu {
 		if e[0] == id {
 			label = e[1]
@@ -210,18 +228,18 @@ func (m *model) choose(id string) tea.Cmd {
 	case "quit":
 		return tea.Quit
 	case "status":
-		return capture("Status", id, dotfiles.Status)
+		return capture("Status", id, w, dotfiles.Status)
 	case "diff":
-		return capture("Diff", id, dotfiles.Diff)
+		return capture("Diff", id, w, dotfiles.Diff)
 	case "pkgs":
-		return capture("Packages", id, pkgs.List)
+		return capture("Packages", id, w, pkgs.List)
 	case "help":
-		return show("Help", help())
+		return capture("Help", id, w, func() error { _, err := fmt.Fprintln(ui.Out, help()); return err })
 	case "outdated":
 		m.busy = true
 		m.title = "Outdated"
 		m.vp.SetContent(ui.Dim.Render("checking GitHub for new releases…"))
-		return capture("Outdated", id, pkgs.Outdated)
+		return capture("Outdated", id, w, pkgs.Outdated)
 	case "pull", "update", "self-update":
 		return runTerm(label, func() error { return run([]string{id}) })
 	case "apply":
@@ -242,7 +260,7 @@ func (m *model) choose(id string) tea.Cmd {
 			if strings.HasPrefix(p, "~/") {
 				p = config.Home() + p[1:]
 			}
-			return capture("Add file", "", func() error { return dotfiles.Add(p, tag) })
+			return capture("Add file", "", w, func() error { return dotfiles.Add(p, tag) })
 		},
 			huh.NewInput().Title("Path to add").Placeholder("~/.bashrc").Value(&p),
 			huh.NewInput().Title("Only for machine/OS").Placeholder("empty = all").Value(&tag))
@@ -268,7 +286,7 @@ func (m *model) choose(id string) tea.Cmd {
 				return show(label, ui.Dim.Render("nothing picked"))
 			}
 			if id == "uninstall" {
-				return capture("Uninstall", "", func() error { return pkgs.Uninstall(picked) })
+				return capture("Uninstall", "", w, func() error { return pkgs.Uninstall(picked) })
 			}
 			return runTerm("Install", func() error { return pkgs.Install(picked) })
 		}, huh.NewMultiSelect[string]().Title(label).Description("space to toggle, enter to confirm").Options(opts...).Value(&picked))
@@ -324,18 +342,24 @@ func show(title, body string) tea.Cmd {
 	return func() tea.Msg { return contentMsg{title: title, body: body} }
 }
 
-// capture runs a report in the background and shows what it printed in the content pane.
-func capture(title, view string, fn func() error) tea.Cmd {
+// captureMu lets one report at a time point the shared ui.Out and ui.BoxWidth at itself:
+// overlapping captures (a resize while a report runs) would restore each other's buffer for good.
+var captureMu sync.Mutex
+
+// capture runs a report in the background, drawn at width, and shows what it printed in the content pane.
+func capture(title, view string, width int, fn func() error) tea.Cmd {
 	return func() tea.Msg {
+		captureMu.Lock()
+		defer captureMu.Unlock()
 		var b bytes.Buffer
-		old := ui.Out
-		ui.Out = &b
+		oldOut, oldWidth := ui.Out, ui.BoxWidth
+		ui.Out, ui.BoxWidth = &b, width
 		err := fn()
-		ui.Out = old
+		ui.Out, ui.BoxWidth = oldOut, oldWidth
 		if err != nil {
 			b.WriteString("\n" + lipgloss.NewStyle().Foreground(ui.Err).Render("✗ "+err.Error()))
 		}
-		return contentMsg{title, view, b.String()}
+		return contentMsg{title, view, b.String(), width}
 	}
 }
 
