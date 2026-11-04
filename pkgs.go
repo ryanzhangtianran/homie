@@ -295,7 +295,7 @@ func fetch(url string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// installOne installs p, or upgrades it when a newer release exists. Install commands are simply rerun.
+// installOne installs p, or upgrades it when a newer release exists. Install commands are rerun.
 func installOne(p Pkg) error {
 	if p.Script != "" {
 		say(cAccent, "▶", "install", p.Name+dim.Render("  (install command)"))
@@ -366,6 +366,12 @@ func install(names []string) error {
 		return err
 	}
 	for _, p := range ps {
+		// install commands (claude, codex, ...) redownload everything and those tools update themselves,
+		// so a bulk upgrade only runs them when missing; naming the package reruns it
+		if len(names) == 0 && p.Script != "" && installed(p) {
+			say(cDim, "·", "installed", fmt.Sprintf("%-10s %s", p.Name, dim.Render("rerun with: homie install "+p.Name)))
+			continue
+		}
 		if err := installOne(p); err != nil {
 			return fmt.Errorf("%s: %w", p.Name, err)
 		}
@@ -573,7 +579,7 @@ func outdated() error {
 	}
 	if len(rows) == 0 {
 		fmt.Println(box("Outdated", lipgloss.NewStyle().Foreground(cOK).Render("✓ all release packages are up to date")+
-			"\n"+dim.Render("install-command packages update via `homie upgrade`")))
+			"\n"+dim.Render("install-command packages update themselves, or: homie install <name>")))
 		return nil
 	}
 	grid("Outdated", []string{"PACKAGE", "INSTALLED", "LATEST"}, rows)

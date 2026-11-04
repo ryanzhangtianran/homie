@@ -110,7 +110,7 @@ var helpSections = []struct {
 	{"Packages", [][]string{
 		{"pkgs", "list this machine's packages"},
 		{"add-pkg <name> <spec>", "add a package to .homie.toml and install it"},
-		{"install [pkg...]", "install or upgrade (no args: all)"},
+		{"install [pkg...]", "install or upgrade; named ones always rerun"},
 		{"upgrade", "upgrade all packages"},
 		{"outdated", "check for new releases"},
 		{"uninstall <pkg...>", "remove what homie installed"},

@@ -11,7 +11,8 @@
 # One line per app. `homie add-pkg <name> <spec>` appends here and installs.
 #   "gh:owner/repo"  latest GitHub release; the asset for this OS/arch is picked automatically and
 #                    its executables go to ~/.local/bin (supports outdated / upgrade / uninstall)
-#   anything else    an install command, run with sh (PowerShell on Windows); upgrade reruns it
+#   anything else    an install command, run with sh (PowerShell on Windows) when missing;
+#                    `homie install <name>` reruns it
 [packages]
 fnm      = "gh:Schniz/fnm"
 starship = "gh:starship/starship"

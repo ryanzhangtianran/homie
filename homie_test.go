@@ -351,3 +351,24 @@ func TestBoxesShareWidth(t *testing.T) {
 		t.Fatalf("box must grow for wide content, got %d", w)
 	}
 }
+
+func TestUpgradeSkipsInstalledScripts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh command")
+	}
+	h, src := sandbox(t, "server")
+	write(t, filepath.Join(src, ".homie.toml"), "[packages]\ntool = 'echo x >> \"$HOME/ran\"'\n", 0o644)
+	write(t, filepath.Join(binDir(), "tool"), "", 0o755) // already installed
+	if err := install(nil); err != nil {
+		t.Fatal(err)
+	}
+	if dirExists(filepath.Join(h, "ran")) {
+		t.Fatal("bulk upgrade reran an installed install-command package")
+	}
+	if err := install([]string{"tool"}); err != nil {
+		t.Fatal(err)
+	}
+	if read(filepath.Join(h, "ran")) != "x\n" {
+		t.Fatal("naming the package must rerun its install command")
+	}
+}

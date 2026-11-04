@@ -59,7 +59,7 @@ One line per app, like a dependency list:
 For `gh:` homie picks this OS/arch's asset from the release by name. On Linux it prefers musl builds,
 which run on old distros. It installs the archive's executables into `~/.local/bin` and records the
 version, so `outdated`, `upgrade` and `uninstall` work. An install command is run with sh (PowerShell
-on Windows), and `upgrade` reruns it.
+on Windows) only when the program is missing; `homie install <name>` reruns it on purpose.
 
 Use a table when one line is not enough: per-OS/machine differences (`on.windows = "..."`),
 `only = ["server"]`, `bins`, an explicit `url` with `{os} {arch} {rust} {version}`, `files`, `remove`.
